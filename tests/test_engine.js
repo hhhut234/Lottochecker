@@ -95,12 +95,38 @@ console.log('신경망 평균 적중', (nnr.matches / nnr.tickets).toFixed(3),
 assert.ok(Number.isFinite(nnr.loss));
 
 // 패턴 자동 탐색
+function showPatterns(label, ps) {
+  console.log(`${label}: 기본 조건 ${ps.baseConds}개, 결과 ${ps.targets}종, 가설 ${ps.hypotheses.toLocaleString()}개`);
+  console.log(`  발견 구간 |z|>3: ${ps.strong}개 (우연 기대 ${ps.strongExpected.toFixed(0)}개), 최대 |z| ${ps.maxZ.toFixed(2)}, 발견-검증 상관 ${ps.corr.toFixed(4)}`);
+  console.log(`  강했던 ${ps.repN}개가 검증 구간에서 같은 방향 ${(ps.repSame / ps.repN * 100).toFixed(1)}% (우연 50%), 평균 효과 z ${ps.repMean.toFixed(3)}, 상위 ${ps.top.length}개 중 재현 ${ps.confirmed}개`);
+  ps.top.slice(0, 4).forEach(h => console.log('   ', h.cond, '→', h.result, '| 발견', (h.rA * 100).toFixed(0) + '%/' + h.nA, 'z', h.zA.toFixed(1), '| 검증', (h.rB * 100).toFixed(0) + '%/' + h.nB, 'z', h.zB.toFixed(1)));
+}
+let tp = Date.now();
 const ps = L.patternSearch(draws);
-console.log(`패턴 탐색: 가설 ${ps.hypotheses}개, 발견 구간에서 강해 보인 것 ${ps.strong}개 (우연 기대 ${ps.strongExpected.toFixed(0)}개), 발견-검증 상관 ${ps.corr.toFixed(3)}`);
-console.log(`  상위 ${ps.top.length}개 중 검증 구간에서 같은 방향 ${ps.sameSign}개, 뚜렷이 재현 ${ps.confirmed}개`);
-ps.top.slice(0, 4).forEach(h => console.log('   ', h.cond, '→', h.target + '번', '발견', (h.rA * 100).toFixed(0) + '%', 'z', h.zA.toFixed(1), '| 검증', (h.rB * 100).toFixed(0) + '%', 'z', h.zB.toFixed(1)));
-assert.ok(ps.hypotheses > 3000);
-assert.ok(Math.abs(ps.corr) < 0.1);
+showPatterns(`패턴 탐색 (${Date.now() - tp}ms)`, ps);
+assert.ok(ps.hypotheses > 500000, '가설 50만 개 이상');
+assert.ok(Math.abs(ps.corr) < 0.05);
+
+// 일부러 심은 패턴을 찾아내는지: "직전 회차에 7번이 나오면 23번이 40% 확률로 나온다"
+{
+  const rand = L.rng(99);
+  let prev = [1, 2, 3, 4, 5, 6];
+  const planted = draws.map(d => {
+    let c = L.randomCombo(rand);
+    if (prev.indexOf(7) >= 0 && c.indexOf(23) < 0 && rand() < 0.31) {
+      c[Math.floor(rand() * 6)] = 23; c = Array.from(new Set(c));
+      while (c.length < 6) { const x = 1 + Math.floor(rand() * 45); if (c.indexOf(x) < 0) c.push(x); }
+      c.sort((a, b) => a - b);
+    }
+    prev = c;
+    return Object.assign({}, d, { nums: c });
+  });
+  const pp = L.patternSearch(planted);
+  showPatterns('심은 패턴 시험', pp);
+  const found = pp.top.find(h => h.cond === '직전 회차에 7번이 나옴' && h.result === '23번이 더 나온다');
+  assert.ok(found, '심은 패턴이 상위에 나와야 한다');
+  assert.ok(found.kept, '심은 패턴은 검증 구간에서도 유지되어야 한다');
+}
 
 // 덜 고르는 번호 전략은 동시 당첨 배수가 무작위보다 낮아야 한다
 assert.ok(res.unpop.share / res.unpop.shareN < res.random.share / res.random.shareN - 0.05);

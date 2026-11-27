@@ -666,72 +666,221 @@
   }
 
   /* ---------- 패턴 자동 탐색 ----------
-   * "어떤 조건이면 어떤 번호가 더/덜 나온다"는 가설 수천 개를 한꺼번에 시험한다.
-   * 앞쪽 70% 회차(발견 구간)에서 가장 강해 보이는 것을 고른 뒤,
-   * 고를 때 쓰지 않은 뒤쪽 30%(검증 구간)에서도 유지되는지 본다. */
-  function patternSearch(draws, opts) {
+   * "어떤 조건이면 어떤 결과가 더/덜 나온다"는 가설을 수십만 개 한꺼번에 시험한다.
+   *   조건: 기본 조건 약 310개 + 그 둘을 묶은 조합
+   *   결과: 번호 45개 + 회차의 모양·당첨자 수에 관한 16가지
+   * 앞쪽 70% 회차(발견 구간)에서 강해 보이는 것을 찾고,
+   * 찾을 때 쓰지 않은 뒤쪽 30%(검증 구간)에서도 유지되는지 본다.
+   * 계산이 많아 step() 으로 나눠 돌린다. */
+  function createPatternSearch(draws, opts) {
     opts = opts || {};
-    var n = draws.length, split = Math.floor(n * (opts.split || 0.7)), conds = [], k;
-    function has(d, x) { return d.nums.indexOf(x) >= 0; }
-    function sumOf(d) { var t = 0; for (var i = 0; i < PICK; i++) t += d.nums[i]; return t; }
-    function oddOf(d) { var t = 0; for (var i = 0; i < PICK; i++) t += d.nums[i] & 1; return t; }
-    function consec(d) { for (var i = 1; i < PICK; i++) if (d.nums[i] === d.nums[i - 1] + 1) return true; return false; }
-    function cond(text, fn) { conds.push({ text: text, fn: fn }); }
+    var n = draws.length, T0 = 5;                       // 5회 전까지 보므로 6번째 회차부터
+    var split = Math.floor(n * (opts.split || 0.7));
+    var minA = opts.minA || 25, minB = opts.minB || 10, TOPK = opts.top || 12;
+    var i, k, t;
+
+    function sumOf(d) { var s = 0; for (var a = 0; a < PICK; a++) s += d.nums[a]; return s; }
+    function oddOf(d) { var s = 0; for (var a = 0; a < PICK; a++) s += d.nums[a] & 1; return s; }
+    function consec(d) { for (var a = 1; a < PICK; a++) if (d.nums[a] === d.nums[a - 1] + 1) return true; return false; }
+    function decade(d, x) { var s = 0; for (var a = 0; a < PICK; a++) if (Math.min(4, Math.floor((d.nums[a] - 1) / 10)) === x) s++; return s; }
+    function manyWinners(d) { return d.sales > 0 && d.w1 > d.sales / priceOf(d.n) / TOTAL; }
+    var DEC = ['1~10번대', '11~20번대', '21~30번대', '31~40번대', '41~45번대'];
+
+    /* --- 결과(이번 회차에 관한 것) --- */
+    var targets = [];
     for (k = 1; k <= N; k++) (function (x) {
-      cond('직전 회차에 ' + x + '번이 나옴', function (t) { return has(draws[t - 1], x); });
-      cond('2회 전에 ' + x + '번이 나옴', function (t) { return has(draws[t - 2], x); });
+      targets.push({ up: x + '번이 더 나온다', down: x + '번이 덜 나온다', fn: function (d) { return d.nums.indexOf(x) >= 0; }, p: BASE_P });
     })(k);
-    cond('직전 회차 번호 합이 150 이상', function (t) { return sumOf(draws[t - 1]) >= 150; });
-    cond('직전 회차 번호 합이 125 이하', function (t) { return sumOf(draws[t - 1]) <= 125; });
-    cond('직전 회차에 홀수가 4개 이상', function (t) { return oddOf(draws[t - 1]) >= 4; });
-    cond('직전 회차에 홀수가 2개 이하', function (t) { return oddOf(draws[t - 1]) <= 2; });
-    cond('직전 회차에 연속번호가 있음', function (t) { return consec(draws[t - 1]); });
-    cond('직전 회차에 연속번호가 없음', function (t) { return !consec(draws[t - 1]); });
-    cond('직전 회차 최대 번호가 38 이하', function (t) { return draws[t - 1].nums[5] <= 38; });
-    cond('직전 회차 최소 번호가 8 이상', function (t) { return draws[t - 1].nums[0] >= 8; });
-    cond('회차 번호가 짝수', function (t) { return draws[t].n % 2 === 0; });
-    cond('회차 번호가 홀수', function (t) { return draws[t].n % 2 === 1; });
+    function target(name, fn) { targets.push({ up: name + ' 회차가 더 나온다', down: name + ' 회차가 덜 나온다', fn: fn, p: 0 }); }
+    target('번호 합이 150 이상인', function (d) { return sumOf(d) >= 150; });
+    target('번호 합이 125 이하인', function (d) { return sumOf(d) <= 125; });
+    target('홀수가 4개 이상인', function (d) { return oddOf(d) >= 4; });
+    target('홀수가 2개 이하인', function (d) { return oddOf(d) <= 2; });
+    target('연속번호가 있는', consec);
+    target('가장 작은 번호가 8 이상인', function (d) { return d.nums[0] >= 8; });
+    target('가장 큰 번호가 38 이하인', function (d) { return d.nums[5] <= 38; });
+    target('22 이하 번호가 4개 이상인', function (d) { var s = 0; for (var a = 0; a < PICK; a++) if (d.nums[a] <= 22) s++; return s >= 4; });
+    target('직전 회차와 2개 이상 겹치는', function (d, tt) { return matchCount(d.nums, draws[tt - 1]) >= 2; });
+    for (k = 0; k < 5; k++) (function (x) {
+      target(DEC[x] + '가 2개 이상인', function (d) { return decade(d, x) >= 2; });
+    })(k);
+    target('1등 당첨자가 판매량 대비 많은', manyWinners);
+    target('보너스 번호가 홀수인', function (d) { return (d.b & 1) === 1; });
+    var NT = targets.length;
+
+    // 회차별로 참인 결과 목록, 그리고 번호 외 결과의 평소 비율
+    var tgStart = new Int32Array(n + 1), tgList = [], rate = new Float64Array(NT), valid = n - T0;
+    for (t = 0; t < n; t++) {
+      tgStart[t] = tgList.length;
+      if (t < T0) continue;
+      for (k = 0; k < NT; k++) if (targets[k].fn(draws[t], t)) { tgList.push(k); rate[k]++; }
+    }
+    tgStart[n] = tgList.length;
+    for (k = N; k < NT; k++) targets[k].p = rate[k] / valid;
+
+    /* --- 기본 조건(이번 회차 추첨 전에 알 수 있는 것) --- */
+    var conds = [];
+    function cond(group, text, fn) {
+      var a = new Uint8Array(n);
+      for (var tt = T0; tt < n; tt++) a[tt] = fn(tt) ? 1 : 0;
+      conds.push({ group: group, text: text, a: a });
+    }
+    for (var lag = 1; lag <= 5; lag++) for (k = 1; k <= N; k++) (function (L, x) {
+      cond('lag' + L, (L === 1 ? '직전 회차에 ' : L + '회 전에 ') + x + '번이 나옴', function (tt) { return draws[tt - L].nums.indexOf(x) >= 0; });
+    })(lag, k);
+    [[0, 112], [113, 129], [130, 146], [147, 163], [164, 999]].forEach(function (r) {
+      cond('sum', '직전 회차 번호 합이 ' + (r[0] ? r[0] : '') + (r[1] < 999 ? (r[0] ? '~' : '') + r[1] + (r[0] ? '' : ' 이하') : ' 이상'), function (tt) { var s = sumOf(draws[tt - 1]); return s >= r[0] && s <= r[1]; });
+    });
+    [[0, 1, '1개 이하'], [2, 2, '2개'], [3, 3, '3개'], [4, 4, '4개'], [5, 6, '5개 이상']].forEach(function (r) {
+      cond('odd', '직전 회차 홀수가 ' + r[2], function (tt) { var o = oddOf(draws[tt - 1]); return o >= r[0] && o <= r[1]; });
+    });
+    cond('con', '직전 회차에 연속번호가 있음', function (tt) { return consec(draws[tt - 1]); });
+    cond('con', '직전 회차에 연속번호가 없음', function (tt) { return !consec(draws[tt - 1]); });
+    [[1, 3, '3 이하'], [4, 9, '4~9'], [10, 45, '10 이상']].forEach(function (r) {
+      cond('min', '직전 회차 최소 번호가 ' + r[2], function (tt) { var v = draws[tt - 1].nums[0]; return v >= r[0] && v <= r[1]; });
+    });
+    [[1, 38, '38 이하'], [39, 42, '39~42'], [43, 45, '43 이상']].forEach(function (r) {
+      cond('max', '직전 회차 최대 번호가 ' + r[2], function (tt) { var v = draws[tt - 1].nums[5]; return v >= r[0] && v <= r[1]; });
+    });
+    for (k = 0; k < 5; k++) (function (x) {
+      cond('dec' + x, '직전 회차에 ' + DEC[x] + '가 2개 이상', function (tt) { return decade(draws[tt - 1], x) >= 2; });
+      cond('dec' + x, '직전 회차에 ' + DEC[x] + '가 없음', function (tt) { return decade(draws[tt - 1], x) === 0; });
+    })(k);
+    [[0, 0, '없음'], [1, 1, '1개'], [2, 6, '2개 이상']].forEach(function (r) {
+      cond('carry', '직전 회차의 이월수가 ' + r[2], function (tt) { var c = matchCount(draws[tt - 1].nums, draws[tt - 2]); return c >= r[0] && c <= r[1]; });
+    });
+    cond('w1', '직전 회차 1등이 판매량 대비 많았음', function (tt) { return manyWinners(draws[tt - 1]); });
+    cond('w1', '직전 회차 1등이 판매량 대비 적었음', function (tt) { return !manyWinners(draws[tt - 1]); });
+    cond('sales', '직전 회차 판매액이 그 전보다 늘었음', function (tt) { return draws[tt - 1].sales > draws[tt - 2].sales; });
+    cond('sales', '직전 회차 판매액이 그 전보다 줄었음', function (tt) { return draws[tt - 1].sales <= draws[tt - 2].sales; });
     for (k = 1; k <= 12; k++) (function (m) {
-      cond('추첨일이 ' + m + '월', function (t) { return +draws[t].d.slice(4, 6) === m; });
+      cond('month', '추첨일이 ' + m + '월', function (tt) { return +draws[tt].d.slice(4, 6) === m; });
     })(k);
-    for (k = 0; k <= 9; k++) (function (x) {
-      cond('회차 번호 끝자리가 ' + x, function (t) { return draws[t].n % 10 === x; });
+    for (k = 0; k < 4; k++) (function (q) {
+      cond('month', '추첨일이 ' + (q + 1) + '분기', function (tt) { return Math.floor((+draws[tt].d.slice(4, 6) - 1) / 3) === q; });
     })(k);
+    [[1, 7, '첫째 주'], [8, 14, '둘째 주'], [15, 21, '셋째 주'], [22, 31, '넷째 주 이후']].forEach(function (r) {
+      cond('wom', '추첨일이 그 달의 ' + r[2], function (tt) { var dd = +draws[tt].d.slice(6, 8); return dd >= r[0] && dd <= r[1]; });
+    });
+    cond('yp', '추첨 연도가 짝수 해', function (tt) { return +draws[tt].d.slice(0, 4) % 2 === 0; });
+    cond('yp', '추첨 연도가 홀수 해', function (tt) { return +draws[tt].d.slice(0, 4) % 2 === 1; });
+    [2, 3, 4, 5, 7, 10].forEach(function (m) {
+      for (var r = 0; r < m; r++) (function (rr) {
+        cond('mod' + m, '회차 번호 ÷ ' + m + '의 나머지가 ' + rr, function (tt) { return draws[tt].n % m === rr; });
+      })(r);
+    });
+    var NC = conds.length;
 
-    var p = BASE_P, all = [];
-    conds.forEach(function (c) {
-      var nA = 0, nB = 0, hA = new Int32Array(N + 1), hB = new Int32Array(N + 1), t, i;
-      for (t = 2; t < n; t++) {
-        if (!c.fn(t)) continue;
-        if (t < split) { nA++; for (i = 0; i < PICK; i++) hA[draws[t].nums[i]]++; }
-        else { nB++; for (i = 0; i < PICK; i++) hB[draws[t].nums[i]]++; }
+    /* --- 정확한 우연 기대치: 표본 nA·비율 p 일 때 |z|>3 이 우연히 나올 확률(이항분포) --- */
+    var tailCache = {};
+    function tail3(nA, p) {
+      var key = nA + '|' + p;
+      if (tailCache[key] != null) return tailCache[key];
+      var mean = nA * p, sd = Math.sqrt(nA * p * (1 - p)), pmf = Math.pow(1 - p, nA), tot = 0;
+      for (var x = 0; x <= nA; x++) {
+        if (Math.abs(x - mean) > 3 * sd) tot += pmf;
+        pmf = pmf * (nA - x) / (x + 1) * p / (1 - p);
       }
-      if (nA < 30 || nB < 12) return;
-      for (var j = 1; j <= N; j++) {
-        all.push({
-          cond: c.text, target: j, nA: nA, nB: nB, rA: hA[j] / nA, rB: hB[j] / nB,
-          zA: (hA[j] - nA * p) / Math.sqrt(nA * p * (1 - p)),
-          zB: (hB[j] - nB * p) / Math.sqrt(nB * p * (1 - p))
-        });
-      }
-    });
+      return (tailCache[key] = tot);
+    }
 
-    var H = all.length, strong = 0, sa = 0, sb = 0, saa = 0, sbb = 0, sab = 0;
-    all.forEach(function (h) {
-      if (Math.abs(h.zA) > 2) strong++;
-      sa += h.zA; sb += h.zB; saa += h.zA * h.zA; sbb += h.zB * h.zB; sab += h.zA * h.zB;
-    });
-    var corr = (sab - sa * sb / H) / Math.sqrt((saa - sa * sa / H) * (sbb - sb * sb / H));
-    all.sort(function (x, y) { return Math.abs(y.zA) - Math.abs(x.zA); });
-    var top = all.slice(0, opts.top || 12), sameSign = 0, confirmed = 0;
-    top.forEach(function (h) {
-      if (h.zA * h.zB > 0) { sameSign++; if (Math.abs(h.zB) > 2) confirmed++; }
-    });
-    return {
-      hypotheses: H, conditions: conds.length, strong: strong, strongExpected: H * 0.0455,
-      corr: corr, top: top, sameSign: sameSign, confirmed: confirmed,
-      discFrom: draws[2].n, discTo: draws[split - 1].n, holdFrom: draws[split].n, holdTo: draws[n - 1].n
+    /* --- 집계 --- */
+    var st = {
+      hyp: 0, condsUsed: 0, strong: 0, strongExp: 0, maxZ: 0,
+      repN: 0, repSame: 0, repMean: 0,                 // 발견 구간에서 강했던 가설의 검증 구간 성적
+      sa: 0, sb: 0, saa: 0, sbb: 0, sab: 0, top: []
     };
+    var hA = new Int32Array(NT), hB = new Int32Array(NT), both = new Uint8Array(n);
+
+    function evaluate(arr, ci, cj) {
+      var nA = 0, nB = 0, a, tt;
+      for (tt = T0; tt < split; tt++) nA += arr[tt];
+      if (nA < minA) return;
+      for (tt = split; tt < n; tt++) nB += arr[tt];
+      if (nB < minB) return;
+      hA.fill(0); hB.fill(0);
+      for (tt = T0; tt < n; tt++) {
+        if (!arr[tt]) continue;
+        var h = tt < split ? hA : hB;
+        for (a = tgStart[tt]; a < tgStart[tt + 1]; a++) h[tgList[a]]++;
+      }
+      st.condsUsed++;
+      for (var q = 0; q < NT; q++) {
+        var p = targets[q].p;
+        if (p <= 0.02 || p >= 0.98) continue;
+        var zA = (hA[q] - nA * p) / Math.sqrt(nA * p * (1 - p));
+        var zB = (hB[q] - nB * p) / Math.sqrt(nB * p * (1 - p));
+        st.hyp++;
+        st.sa += zA; st.sb += zB; st.saa += zA * zA; st.sbb += zB * zB; st.sab += zA * zB;
+        st.strongExp += tail3(nA, p);
+        var az = Math.abs(zA);
+        if (az > 3) {
+          st.strong++; st.repN++;
+          var signed = zA > 0 ? zB : -zB;
+          if (signed > 0) st.repSame++;
+          st.repMean += signed;
+        }
+        if (az > st.maxZ) st.maxZ = az;
+        if (st.top.length < TOPK || az > st.top[st.top.length - 1].az) {
+          st.top.push({ az: az, ci: ci, cj: cj, q: q, nA: nA, nB: nB, rA: hA[q] / nA, rB: hB[q] / nB, zA: zA, zB: zB, p: p });
+          st.top.sort(function (x, y) { return y.az - x.az; });
+          if (st.top.length > TOPK) st.top.pop();
+        }
+      }
+    }
+
+    // 작업 순서: 조건 하나씩 → 조건 두 개 조합(서로 다른 종류끼리만)
+    var phase = 0, ci = 0, cj = 0, total = NC + NC * (NC - 1) / 2, doneUnits = 0;
+
+    function step(budget) {
+      var left = budget || 2000;
+      while (left > 0) {
+        if (phase === 0) {
+          if (ci >= NC) { phase = 1; ci = 0; cj = 1; continue; }
+          evaluate(conds[ci].a, ci, -1); ci++; doneUnits++; left--;
+        } else {
+          if (ci >= NC - 1) return true;
+          if (conds[ci].group !== conds[cj].group) {
+            var x = conds[ci].a, y = conds[cj].a;
+            for (var tt = T0; tt < n; tt++) both[tt] = x[tt] & y[tt];
+            evaluate(both, ci, cj);
+          }
+          doneUnits++; left--;
+          if (++cj >= NC) { ci++; cj = ci + 1; }
+        }
+      }
+      return phase === 1 && ci >= NC - 1;
+    }
+
+    function result() {
+      var H = st.hyp || 1;
+      var corr = (st.sab - st.sa * st.sb / H) / Math.sqrt((st.saa - st.sa * st.sa / H) * (st.sbb - st.sb * st.sb / H));
+      var top = st.top.map(function (h) {
+        return {
+          cond: conds[h.ci].text + (h.cj >= 0 ? ' + ' + conds[h.cj].text : ''),
+          result: h.zA > 0 ? targets[h.q].up : targets[h.q].down,
+          nA: h.nA, nB: h.nB, rA: h.rA, rB: h.rB, zA: h.zA, zB: h.zB, p: h.p,
+          kept: h.zA * h.zB > 0 && Math.abs(h.zB) > 2
+        };
+      });
+      return {
+        hypotheses: st.hyp, baseConds: NC, condsUsed: st.condsUsed, targets: NT,
+        strong: st.strong, strongExpected: st.strongExp, maxZ: st.maxZ, corr: corr,
+        repN: st.repN, repSame: st.repSame, repMean: st.repN ? st.repMean / st.repN : 0,
+        // 강했던 가설들이 검증 구간에서 같은 방향으로 나온 비율이 50%에서 얼마나 벗어났나
+        repZ: st.repN ? (st.repSame - st.repN / 2) / Math.sqrt(st.repN / 4) : 0,
+        top: top, confirmed: top.filter(function (h) { return h.kept; }).length,
+        discFrom: draws[T0].n, discTo: draws[split - 1].n, holdFrom: draws[split].n, holdTo: draws[n - 1].n
+      };
+    }
+
+    return { total: total, done: function () { return doneUnits; }, step: step, result: result };
+  }
+
+  function patternSearch(draws, opts) {
+    var job = createPatternSearch(draws, opts);
+    while (!job.step(5000)) { /* 끝까지 */ }
+    return job.result();
   }
 
   /* ---------- 백테스트 ---------- */
@@ -840,7 +989,7 @@
     gapOf: gapOf, numberScores: numberScores, generate: generate, randomCombo: randomCombo,
     shapeOk: shapeOk, matchCount: matchCount, rankOf: rankOf, prizeOf: prizeOf, priceOf: priceOf,
     popularity: popularity, shareFactor: shareFactor, popValidation: popValidation,
-    BT_SHOW: BT_SHOW, patternSearch: patternSearch,
+    BT_SHOW: BT_SHOW, patternSearch: patternSearch, createPatternSearch: createPatternSearch,
     createBacktest: createBacktest, blocks: blocks, chanceBand: chanceBand, BT_WINDOWS: BT_WINDOWS,
     fairness: fairness, chiTail: chiTail, integrity: integrity, numberDetail: numberDetail, patterns: patterns
   };

@@ -404,29 +404,47 @@
   }
 
   /* ---------- 패턴 자동 탐색 ---------- */
+  var patRunning = false;
   function runPatterns() {
-    $('patOut').innerHTML = '<div class="empty">탐색 중…</div>';
-    setTimeout(function () {
-      var r = L.patternSearch(draws);
-      var rows = r.top.map(function (h) {
-        var keep = h.zA * h.zB > 0 && Math.abs(h.zB) > 2;
-        return '<div class="tst"><div><div class="nm">' + h.cond + ' → ' + h.target + '번이 ' + (h.zA > 0 ? '더' : '덜') + ' 나온다</div>' +
-          '<div class="ds">발견 구간 ' + pct(h.rA, 0) + ' (' + h.nA + '회 중) · 검증 구간 ' + pct(h.rB, 0) + ' (' + h.nB + '회 중) · 기대 13%</div></div>' +
-          '<div class="rt"><span class="badge ' + (keep ? 'no' : 'ok') + '">' + (keep ? '재현됨' : '사라짐') + '</span></div></div>';
-      }).join('');
-      $('patOut').innerHTML =
-        '<div class="kv" style="margin-top:10px">' +
-          '<div><b>' + r.hypotheses.toLocaleString('ko-KR') + '</b><span>시험한 가설 수</span></div>' +
-          '<div><b>' + r.strong + '</b><span>발견 구간에서 강해 보인 것</span></div>' +
-          '<div><b>' + Math.round(r.strongExpected) + '</b><span>우연만으로 기대되는 수</span></div>' +
-          '<div><b>' + r.confirmed + ' / ' + r.top.length + '</b><span>상위 가설 중 재현된 것</span></div></div>' +
-        '<p style="margin:12px 0 4px">' + (r.confirmed === 0
-          ? '<b class="good">발견 구간에서 가장 강해 보였던 패턴 ' + r.top.length + '개 중, 처음 보는 회차에서도 유지된 것은 하나도 없습니다.</b>'
-          : '<b class="gold">상위 ' + r.top.length + '개 중 ' + r.confirmed + '개가 검증 구간에서도 같은 방향으로 나왔습니다.</b> 가설을 많이 시험하면 우연히 재현되는 것도 생기므로, 다음 회차들에서 계속 유지되는지 지켜봐야 합니다.') + '</p>' +
-        rows +
-        '<p class="note">' + r.discFrom + '~' + r.discTo + '회에서 패턴을 찾고, ' + r.holdFrom + '~' + r.holdTo + '회로 검증했습니다. 가설을 수천 개 시험하면 아무 패턴이 없어도 그럴듯해 보이는 것이 수백 개 나옵니다(위의 ' + r.strong + '개 대 기대 ' + Math.round(r.strongExpected) + '개). ' +
-        '그래서 "찾은 데이터"가 아니라 "처음 보는 데이터"에서 다시 확인해야 합니다. 전체 가설에 대해 발견 구간과 검증 구간의 결과가 얼마나 닮았는지를 나타내는 상관계수는 ' + signed(r.corr, 3) + '로, 0에 가까울수록 발견 구간의 결과가 검증 구간과 무관했다는 뜻입니다.</p>';
-    }, 30);
+    if (patRunning) return;
+    patRunning = true;
+    $('runPat').disabled = true;
+    var job = L.createPatternSearch(draws);
+    $('patOut').innerHTML = '<progress id="patProg" value="0" max="' + job.total + '"></progress><p class="note" id="patState"></p>';
+    (function loop() {
+      var fin = job.step(2500);
+      $('patProg').value = job.done();
+      $('patState').textContent = '조건 조합 ' + job.done().toLocaleString('ko-KR') + ' / ' + job.total.toLocaleString('ko-KR') + ' 확인 중';
+      if (!fin) return setTimeout(loop, 0);
+      patRunning = false;
+      $('runPat').disabled = false;
+      renderPatterns(job.result());
+    })();
+  }
+
+  function renderPatterns(r) {
+    var share = r.repN ? r.repSame / r.repN : 0;
+    var signal = (r.repZ > 3 && r.repMean > 0) || r.confirmed >= 4;
+    var rows = r.top.map(function (h) {
+      return '<div class="tst"><div><div class="nm">' + h.cond + '</div><div class="nm" style="font-weight:600">→ ' + h.result + '</div>' +
+        '<div class="ds">발견 구간 ' + pct(h.rA, 0) + ' (' + h.nA + '회 중) · 검증 구간 ' + pct(h.rB, 0) + ' (' + h.nB + '회 중) · 평소 ' + pct(h.p, 0) + '</div></div>' +
+        '<div class="rt"><span class="badge ' + (h.kept ? 'warn' : 'ok') + '">' + (h.kept ? '재현됨' : '사라짐') + '</span></div></div>';
+    }).join('');
+    var expKept = r.top.length * 0.023;
+    $('patOut').innerHTML =
+      '<div class="kv" style="margin-top:10px">' +
+        '<div><b>' + r.hypotheses.toLocaleString('ko-KR') + '</b><span>시험한 가설 수</span></div>' +
+        '<div><b>' + r.strong.toLocaleString('ko-KR') + '</b><span>발견 구간에서 강했던 것</span></div>' +
+        '<div><b>' + Math.round(r.strongExpected).toLocaleString('ko-KR') + '</b><span>우연만으로 기대되는 수</span></div>' +
+        '<div><b>' + pct(share, 0) + '</b><span>검증 구간에서 같은 방향 (우연 50%)</span></div></div>' +
+      '<p style="margin:12px 0 4px">' + (signal
+        ? '<b class="gold">발견 구간에서 강했던 패턴이 처음 보는 회차에서도 우연 이상으로 유지됐습니다.</b> 아래 목록에서 "재현됨"으로 표시된 것을 확인하세요. 다음 회차들에서도 이어지는지 지켜볼 만합니다.'
+        : '<b class="good">이상한 점은 나오지 않았습니다.</b> 발견 구간에서 강해 보인 패턴은 ' + r.strong.toLocaleString('ko-KR') + '개로 우연만으로 기대되는 수(' + Math.round(r.strongExpected).toLocaleString('ko-KR') + '개)와 비슷하고, 이들이 처음 보는 회차에서 같은 방향으로 나온 비율도 ' + pct(share, 0) + '로 동전 던지기(50%)보다 높지 않았습니다.') + '</p>' +
+      '<h3>발견 구간에서 가장 강했던 ' + r.top.length + '개</h3>' + rows +
+      '<p class="note">기본 조건 ' + r.baseConds + '개와 그 둘씩의 조합에, 결과 ' + r.targets + '종(번호 45개, 번호 합·홀짝·연속번호·번호대, 1등 당첨자 수 등)을 곱해 시험했습니다. ' + r.discFrom + '~' + r.discTo + '회에서 찾고 ' + r.holdFrom + '~' + r.holdTo + '회로 검증했습니다.</p>' +
+      '<p class="note">가설을 ' + Math.round(r.hypotheses / 10000) + '만 개 시험하면 아무 패턴이 없어도 "48%나 나왔다(평소 13%)" 같은 것이 반드시 수천 개 나옵니다. 그래서 찾는 데 쓰지 않은 회차에서 다시 확인해야 합니다. ' +
+      '상위 ' + r.top.length + '개 중 "재현됨"은 ' + r.confirmed + '개인데, 우연만으로도 평균 ' + expKept.toFixed(1) + '개쯤 나오는 수준입니다. ' +
+      '이 탐색이 진짜 패턴을 놓치지 않는지도 확인했습니다. "직전 회차에 7번이 나오면 23번이 잘 나온다"는 규칙을 일부러 심은 가짜 기록에서는 그 규칙이 1위로 잡히고 검증 구간에서도 유지됐습니다.</p>';
   }
 
   function renderTest(res) {
