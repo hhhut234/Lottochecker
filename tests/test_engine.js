@@ -72,6 +72,21 @@ for (const k of L.BT_KEYS) {
     '| 회수율', (r.won / r.cost * 100).toFixed(0) + '%',
     '| 동시 당첨 배수', (r.share / r.shareN).toFixed(3));
 }
+// 구간별 보기: 회차별 기록의 합이 전체와 같고, 구간 평균을 다시 합치면 전체 평균이 된다
+for (const k of L.BT_KEYS) {
+  assert.strictEqual(res[k].byDraw.reduce((a, b) => a + b, 0), res[k].matches);
+}
+for (const size of [5, 10, 50]) {
+  const bl = L.blocks(res.mixed.byDraw, size, 5);
+  assert.strictEqual(bl.length, Math.floor((draws.length - 100) / size));
+  let sum = 0;
+  for (let i = 0; i < bl.length * size; i++) sum += res.mixed.byDraw[i];
+  assert.ok(Math.abs(bl.reduce((a, b) => a + b.avg, 0) / bl.length - sum / (bl.length * size * 5)) < 1e-9);
+}
+assert.ok(Math.abs(L.chanceBand(5755) - 0.0207) < 0.0005);
+console.log('최근 N회만 보고 추천:', L.BT_WINDOWS.map(w => `${w}회 ${(res['w' + w].matches / res['w' + w].tickets).toFixed(3)}`).join(' / '));
+L.BT_WINDOWS.forEach(w => assert.strictEqual(res['w' + w].tickets, (draws.length - 100) * 5));
+
 // 덜 고르는 번호 전략은 동시 당첨 배수가 무작위보다 낮아야 한다
 assert.ok(res.unpop.share / res.unpop.shareN < res.random.share / res.random.shareN - 0.05);
 

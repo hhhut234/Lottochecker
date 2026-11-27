@@ -237,11 +237,11 @@
     opts = opts || {};
     var count = opts.count || 5, rand = opts.rand || Math.random;
     var samples = opts.samples || 400;
-    var z = numberScores(s, strategy);
+    var z = opts.z || numberScores(s, strategy);   // opts.z 를 주면 그 점수를 그대로 쓴다
     var w = new Float64Array(N + 1), total = 0, k, i;
     for (k = 1; k <= N; k++) { w[k] = Math.exp(0.7 * z[k]); total += w[k]; }
 
-    var usePair = strategy === 'hot' || strategy === 'mixed';
+    var usePair = !opts.z && (strategy === 'hot' || strategy === 'mixed');
     var pairMean = s.t * 15 / 990; // 한 쌍이 함께 나올 기대 횟수 (회차당 15쌍 / 전체 990쌍)
     var pool = [], seen = {}, tries = 0;
     while (pool.length < samples && tries < samples * 20) {
@@ -428,6 +428,21 @@
    * 화면이 멈추지 않도록 step(k) 로 k회차씩 나눠 돌린다.
    */
   var BT_KEYS = ['mixed', 'hot', 'cold', 'unpop', 'random'];
+  var BT_WINDOWS = [5, 10, 20, 50, 100];
+
+  /* 백테스트 결과를 size 회차씩 끊어, 구간마다 조합당 평균 적중 개수를 낸다.
+   * 마지막에 size 에 못 미치는 자투리 구간은 버린다. */
+  function blocks(byDraw, size, perDraw) {
+    var out = [];
+    for (var a = 0; a + size <= byDraw.length; a += size) {
+      var sum = 0;
+      for (var i = a; i < a + size; i++) sum += byDraw[i];
+      out.push({ from: a, to: a + size - 1, avg: sum / (size * perDraw) });
+    }
+    return out;
+  }
+  /* 조합 n개의 평균 적중 개수가 우연히 벌어질 수 있는 폭(약 95%) */
+  function chanceBand(n) { return 2 * Math.sqrt(0.6146 / n); }
   function createBacktest(draws, opts) {
     opts = opts || {};
     var start = Math.max(opts.start || 100, RECENT);
@@ -436,19 +451,31 @@
     var state = buildState(draws, start);
     var t = start;
     var res = {};
-    BT_KEYS.forEach(function (k) {
-      res[k] = { tickets: 0, matches: 0, ranks: [0, 0, 0, 0, 0, 0], cost: 0, won: 0, share: 0, shareN: 0 };
-    });
+    var total = draws.length - start;
+    function blank() {
+      return { tickets: 0, matches: 0, ranks: [0, 0, 0, 0, 0, 0], cost: 0, won: 0, share: 0, shareN: 0,
+               byDraw: new Uint8Array(total) };   // 회차별 적중 개수 합(조합 perDraw개) — 구간별 보기용
+    }
+    BT_KEYS.forEach(function (k) { res[k] = blank(); });
+    // "최근 W회만 보고 추천" 변형들
+    var windows = opts.windows || BT_WINDOWS;
+    windows.forEach(function (w) { res['w' + w] = blank(); });
 
     function play(key, combo, draw, canShare) {
-      var r = res[key], rank = rankOf(combo, draw);
-      r.tickets++; r.matches += matchCount(combo, draw); r.ranks[rank]++;
+      var r = res[key], rank = rankOf(combo, draw), m = matchCount(combo, draw);
+      r.tickets++; r.matches += m; r.ranks[rank]++; r.byDraw[t - start] += m;
       r.cost += priceOf(draw.n); r.won += prizeOf(rank, draw);
       if (canShare) { r.share += shareFactor(state, combo); r.shareN++; }
     }
 
+    function windowScores(w) {
+      var c = new Int32Array(N + 1);
+      for (var a = Math.max(0, t - w); a < t; a++) for (var b = 0; b < PICK; b++) c[draws[a].nums[b]]++;
+      return zs(function (k) { return c[k]; });
+    }
+
     return {
-      total: draws.length - start,
+      total: total, start: start, perDraw: perDraw, windows: windows,
       done: function () { return t - start; },
       finished: function () { return t >= draws.length; },
       step: function (k) {
@@ -464,6 +491,13 @@
           }
           var rr = rng(seed + draw.n * 7 + 5);
           for (j = 0; j < perDraw; j++) play('random', randomCombo(rr), draw, canShare);
+          for (i = 0; i < windows.length; i++) {
+            var wp = generate(state, 'hot', {
+              count: perDraw, samples: 120, z: windowScores(windows[i]),
+              rand: rng(seed + draw.n * 7 + 100 + windows[i])
+            });
+            for (j = 0; j < wp.length; j++) play('w' + windows[i], wp[j].nums, draw, false);
+          }
           addDraw(state, draw);
         }
         return t >= draws.length;
@@ -478,6 +512,7 @@
     gapOf: gapOf, numberScores: numberScores, generate: generate, randomCombo: randomCombo,
     shapeOk: shapeOk, matchCount: matchCount, rankOf: rankOf, prizeOf: prizeOf, priceOf: priceOf,
     popularity: popularity, shareFactor: shareFactor, popValidation: popValidation,
-    createBacktest: createBacktest, fairness: fairness, chiTail: chiTail, numberDetail: numberDetail, patterns: patterns
+    createBacktest: createBacktest, blocks: blocks, chanceBand: chanceBand, BT_WINDOWS: BT_WINDOWS,
+    fairness: fairness, chiTail: chiTail, numberDetail: numberDetail, patterns: patterns
   };
 });

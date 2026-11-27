@@ -284,8 +284,80 @@
       prog.hidden = true;
       $('runTest').disabled = false;
       $('testState').textContent = draws[100].n + '회 ~ ' + draws[draws.length - 1].n + '회, 회차당 5조합';
-      renderTest(bt.result());
+      lastBt = { res: bt.result(), start: bt.start, perDraw: bt.perDraw, windows: bt.windows };
+      renderTest(lastBt.res);
+      renderBlocks();
     })();
+  }
+
+  /* ---------- 구간별로 끊어 보기 ---------- */
+  var lastBt = null, blockUi = { size: 10, key: 'mixed' };
+  var BLOCK_SIZES = [5, 10, 20, 50, 100];
+
+  function blockStats(key, size) {
+    var list = L.blocks(lastBt.res[key].byDraw, size, lastBt.perDraw);
+    var band = L.chanceBand(size * lastBt.perDraw), above = 0, out = 0, best = list[0], worst = list[0];
+    list.forEach(function (b) {
+      if (b.avg > 0.8) above++;
+      if (Math.abs(b.avg - 0.8) > band) out++;
+      if (b.avg > best.avg) best = b;
+      if (b.avg < worst.avg) worst = b;
+    });
+    return { list: list, band: band, above: above, out: out, best: best, worst: worst };
+  }
+
+  function renderBlocks() {
+    if (!lastBt) return;
+    var names = { random: '무작위' };
+    Object.keys(L.STRATEGIES).forEach(function (k) { names[k] = L.STRATEGIES[k].name; });
+    var size = blockUi.size, st = blockStats(blockUi.key, size), rnd = blockStats('random', size);
+    var n = st.list.length, span = st.band, i;
+    st.list.forEach(function (b) { span = Math.max(span, Math.abs(b.avg - 0.8)); });
+    span *= 1.12;
+    function y(v) { return 50 - (v - 0.8) / span * 50; }
+    function round(b) { return draws[lastBt.start + b.from].n + '~' + draws[lastBt.start + b.to].n + '회'; }
+
+    var bars = '';
+    for (i = 0; i < n; i++) {
+      var a = st.list[i].avg, top = Math.min(y(a), 50), h = Math.max(0.6, Math.abs(y(a) - 50));
+      var col = Math.abs(a - 0.8) <= st.band ? '#6ea8ff' : a > 0.8 ? '#f6c453' : '#ff7a6b';
+      bars += '<rect x="' + (i + 0.12) + '" y="' + top.toFixed(2) + '" width="0.76" height="' + h.toFixed(2) + '" fill="' + col + '"><title>' +
+        round(st.list[i]) + ': ' + a.toFixed(3) + '</title></rect>';
+    }
+    var svg = '<svg viewBox="0 0 ' + n + ' 100" preserveAspectRatio="none" style="width:100%;height:150px;display:block;margin-top:10px" role="img" aria-label="구간별 평균 적중 개수">' +
+      '<rect x="0" y="' + y(0.8 + st.band).toFixed(2) + '" width="' + n + '" height="' + (y(0.8 - st.band) - y(0.8 + st.band)).toFixed(2) + '" fill="rgba(255,255,255,.06)"/>' +
+      bars + '<line x1="0" x2="' + n + '" y1="50" y2="50" stroke="rgba(255,255,255,.45)" stroke-width="0.4" vector-effect="non-scaling-stroke"/></svg>';
+
+    function row(label, s) {
+      return '<tr><td>' + label + '</td><td>' + pct(s.above / s.list.length, 0) + '</td><td>' + s.out + '개 (' + pct(s.out / s.list.length, 0) + ')</td></tr>';
+    }
+    $('blockOut').innerHTML =
+      '<div class="seg">' + BLOCK_SIZES.map(function (s) {
+        return '<button data-bs="' + s + '"' + (s === size ? ' class="on"' : '') + '>' + s + '회씩</button>';
+      }).join('') + '</div>' +
+      '<div class="seg" style="margin-top:8px">' + L.BT_KEYS.map(function (k) {
+        return '<button data-bk="' + k + '"' + (k === blockUi.key ? ' class="on"' : '') + '>' + names[k] + '</button>';
+      }).join('') + '</div>' +
+      svg +
+      '<div class="legend" style="margin-top:8px"><span><i style="background:#6ea8ff"></i>우연 범위 안</span><span><i style="background:#f6c453"></i>범위 위</span><span><i style="background:#ff7a6b"></i>범위 아래</span></div>' +
+      '<p class="note">막대 하나가 ' + size + '회차(조합 ' + (size * lastBt.perDraw) + '개)의 평균 적중 개수입니다. 가운데 선이 기대값 0.800, 옅은 띠가 이 구간 크기에서의 우연 범위(±' + st.band.toFixed(3) + ')입니다. 왼쪽이 과거, 오른쪽이 최근입니다.</p>' +
+      '<div class="kv" style="margin-top:10px">' +
+        '<div><b>' + n + '</b><span>구간 수</span></div>' +
+        '<div><b>' + st.best.avg.toFixed(2) + '</b><span>최고 · ' + round(st.best) + '</span></div>' +
+        '<div><b>' + st.worst.avg.toFixed(2) + '</b><span>최저 · ' + round(st.worst) + '</span></div></div>' +
+      '<div class="tscroll" style="margin-top:10px"><table><thead><tr><th>방법</th><th>기대값보다 높았던 구간</th><th>우연 범위 밖 구간</th></tr></thead><tbody>' +
+        row(names[blockUi.key], st) + (blockUi.key === 'random' ? '' : row('무작위', rnd)) + '</tbody></table></div>' +
+      '<p class="note">어떤 방법이 정말 효과가 있다면 대부분의 구간에서 기대값보다 높아야 합니다. 효과가 없으면 높았던 구간이 절반 근처이고, 범위 밖 구간은 무작위로 골라도 5% 안팎 나옵니다. 구간을 짧게 끊을수록 들쭉날쭉해 보이지만, 그만큼 우연 범위도 넓어집니다. 또 분석법이 뽑은 조합들은 같은 번호를 선호해 함께 맞고 함께 틀리기 때문에, 무작위보다 범위 밖 구간이 조금 더 많이 나오는 것이 정상입니다.</p>';
+
+    var band = L.chanceBand(lastBt.res.random.tickets), wr = '';
+    lastBt.windows.forEach(function (w) {
+      var r = lastBt.res['w' + w], avg = r.matches / r.tickets, d = avg - 0.8;
+      wr += '<tr><td>최근 ' + w + '회</td><td>' + avg.toFixed(3) + '</td><td>' + signed(d, 3) + '</td><td>' +
+        (Math.abs(d) <= band ? '우연 범위 안' : '<b class="bad">범위 밖</b>') + '</td></tr>';
+    });
+    $('windowOut').innerHTML =
+      '<div class="tscroll"><table><thead><tr><th>참고한 기간</th><th>평균 적중</th><th>기대 대비</th><th>판정</th></tr></thead><tbody>' + wr + '</tbody></table></div>' +
+      '<p class="note">매 회차마다 직전 N회에 많이 나온 번호 위주로 5조합을 추천했을 때의 결과입니다. 우연 범위는 ±' + band.toFixed(3) + '입니다.</p>';
   }
 
   function renderTest(res) {
@@ -317,6 +389,8 @@
 
     $('testOut').innerHTML =
       '<div class="card"><h2>결론</h2><p style="margin:0">' + verdict + '</p></div>' +
+      '<div class="card"><h2>구간별로 끊어 보기</h2><div id="blockOut"></div></div>' +
+      '<div class="card"><h2>최근 몇 회만 보고 추천했다면</h2><div id="windowOut"></div></div>' +
       '<div class="card"><h2>조합당 평균 적중 개수</h2><div class="kv">' +
         '<div><b>' + tickets.toLocaleString('ko-KR') + '</b><span>방법별 시험 조합 수</span></div>' +
         '<div><b>0.800</b><span>이론 기대값</span></div>' +
@@ -410,6 +484,13 @@
       renderDetailGrid(); renderDetail();
     });
     $('runTest').addEventListener('click', runTest);
+    $('testOut').addEventListener('click', function (e) {
+      var t = e.target.closest('button'); if (!t) return;
+      if (t.dataset.bs) blockUi.size = +t.dataset.bs;
+      else if (t.dataset.bk) blockUi.key = t.dataset.bk;
+      else return;
+      renderBlocks();
+    });
     $('grid').addEventListener('click', function (e) {
       var t = e.target.closest('button'); if (!t) return;
       var n = +t.dataset.n, i = chosen.indexOf(n);
