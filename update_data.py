@@ -11,8 +11,10 @@ import json
 import sys
 import time
 import urllib.request
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
+KST = timezone(timedelta(hours=9))
 
 URL = "https://www.dhlottery.co.kr/lt645/selectPstLt645Info.do"
 OUT = Path(__file__).resolve().parent / "data.json"
@@ -61,7 +63,7 @@ def main():
 
     def write():
         payload = {
-            "updated": datetime.now().strftime("%Y-%m-%d %H:%M"),
+            "updated": datetime.now(KST).strftime("%Y-%m-%d %H:%M"),  # 어디서 돌려도 한국 시간
             "cols": ["회차", "추첨일", "n1", "n2", "n3", "n4", "n5", "n6", "보너스",
                      "1등인원", "1등금액", "2등금액", "3등금액"],
             "draws": [have[n] for n in sorted(have)],
@@ -80,8 +82,11 @@ def main():
         print("최신 회차를 확인하지 못했습니다.")
         return 1
     top = newest[0][0]
-    have[top] = newest[0]
     missing = [n for n in range(1, top) if n not in have]
+    if top in have and not missing:
+        print(f"새 회차 없음 (최신 {top}회 그대로)")
+        return 0
+    have[top] = newest[0]
     print(f"최신 {top}회 ({newest[0][1]}), 새로 받을 회차 {len(missing)}개", flush=True)
 
     # 빠진 회차가 들어 있는 100회차 구간만 조회한다.
