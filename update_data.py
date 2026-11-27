@@ -24,6 +24,9 @@ HEADERS = {
     "Referer": "https://www.dhlottery.co.kr/lt645/result",
 }
 CHUNK = 100
+COLS = ["회차", "추첨일", "n1", "n2", "n3", "n4", "n5", "n6", "보너스",
+        "1등인원", "1등금액", "2등금액", "3등금액",
+        "판매액", "2등인원", "3등인원", "4등인원", "5등인원"]
 
 
 def call(query="", tries=3):
@@ -40,6 +43,9 @@ def call(query="", tries=3):
                 x["tm4WnNo"], x["tm5WnNo"], x["tm6WnNo"], x["bnsWnNo"],
                 x.get("rnk1WnNope") or 0, x.get("rnk1WnAmt") or 0,
                 x.get("rnk2WnAmt") or 0, x.get("rnk3WnAmt") or 0,
+                x.get("wholEpsdSumNtslAmt") or 0,
+                x.get("rnk2WnNope") or 0, x.get("rnk3WnNope") or 0,
+                x.get("rnk4WnNope") or 0, x.get("rnk5WnNope") or 0,
             ] for x in rows]
         except Exception as e:  # 일시적 오류는 잠깐 쉬고 다시
             last = e
@@ -57,15 +63,15 @@ def main():
     if OUT.exists():
         try:
             for row in json.loads(OUT.read_text(encoding="utf-8"))["draws"]:
-                have[row[0]] = row
+                if len(row) == len(COLS):  # 예전 형식(칸 수가 다른 행)은 다시 받는다
+                    have[row[0]] = row
         except Exception:
             have = {}
 
     def write():
         payload = {
             "updated": datetime.now(KST).strftime("%Y-%m-%d %H:%M"),  # 어디서 돌려도 한국 시간
-            "cols": ["회차", "추첨일", "n1", "n2", "n3", "n4", "n5", "n6", "보너스",
-                     "1등인원", "1등금액", "2등금액", "3등금액"],
+            "cols": COLS,
             "draws": [have[n] for n in sorted(have)],
         }
         tmp = OUT.with_suffix(".tmp")

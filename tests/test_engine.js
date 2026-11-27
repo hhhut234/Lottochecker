@@ -64,11 +64,41 @@ while (!bt.step(200)) { /* 계속 */ }
 const res = bt.result();
 const se = Math.sqrt(0.6146 / res.random.tickets);
 console.log(`회차 ${draws.length}개, 방법별 조합 ${res.random.tickets}개, 우연 범위 ±${(2 * se).toFixed(3)}`);
-for (const k of ['hot', 'cold', 'mixed', 'random']) {
+for (const k of L.BT_KEYS) {
   const r = res[k];
   assert.strictEqual(r.tickets, (draws.length - 100) * 5);
   console.log(k.padEnd(7), '평균 적중', (r.matches / r.tickets).toFixed(3),
     '| 5등~1등', r.ranks.slice(1).reverse().join('/'),
-    '| 회수율', (r.won / r.cost * 100).toFixed(0) + '%');
+    '| 회수율', (r.won / r.cost * 100).toFixed(0) + '%',
+    '| 동시 당첨 배수', (r.share / r.shareN).toFixed(3));
 }
+// 덜 고르는 번호 전략은 동시 당첨 배수가 무작위보다 낮아야 한다
+assert.ok(res.unpop.share / res.unpop.shareN < res.random.share / res.random.shareN - 0.05);
+
+// 카이제곱 꼬리 확률: 알려진 임계값과 대조
+assert.ok(Math.abs(L.chiTail(3.841, 1) - 0.05) < 0.001);
+assert.ok(Math.abs(L.chiTail(60.481, 44) - 0.05) < 0.001);
+const fair = L.fairness(s);
+console.log(`공정성 검정: 카이제곱 ${fair.chi.toFixed(1)} (자유도 ${fair.df}), p = ${fair.p.toFixed(3)}`);
+assert.ok(fair.p > 0 && fair.p < 1);
+
+// 인기도: 번호 효과 합은 0 근처, 검증 그룹은 인기 점수가 높을수록 1등이 많아야 한다
+const pop = L.popularity(s);
+let popSum = 0;
+for (let k = 1; k <= 45; k++) popSum += pop[k];
+assert.ok(Math.abs(popSum) < 0.05, '인기도 효과 합');
+const val = L.popValidation(draws);
+console.log(`인기도 검증 (${val.testFrom}~${val.testTo}회): 1등 평균`,
+  val.groups.map(g => g.avg.toFixed(2)).join(' → '), '명 / 기대 대비',
+  val.groups.map(g => g.ratio.toFixed(2)).join(' → '));
+assert.ok(val.groups[2].ratio > val.groups[0].ratio);
+
+// 번호 상세·모양 통계
+const det = L.numberDetail(draws, s, 7);
+assert.strictEqual(det.count, s.count[7]);
+assert.strictEqual(det.partners.length, 5);
+const pat = L.patterns(draws);
+assert.strictEqual(pat.odd.reduce((a, b) => a + b, 0), draws.length);
+assert.strictEqual(pat.carry.reduce((a, b) => a + b, 0), draws.length - 1);
+assert.ok(Math.abs(pat.oddT.reduce((a, b) => a + b, 0) - 1) < 1e-9);
 console.log('모든 검사 통과');

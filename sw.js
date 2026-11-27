@@ -1,6 +1,6 @@
 /* 오프라인에서도 열리게 하는 캐시. 온라인이면 항상 최신 파일을 먼저 받는다. */
-var CACHE = 'lotto-v1';
-var FILES = ['./', 'index.html', 'engine.js', 'app.js', 'data.json', 'manifest.json', 'icon.svg'];
+var CACHE = 'lotto-v2';
+var FILES = ['./', 'index.html', 'engine.js', 'machine.js', 'app.js', 'data.json', 'manifest.json', 'icon.svg'];
 
 self.addEventListener('install', function (e) {
   e.waitUntil(caches.open(CACHE).then(function (c) { return c.addAll(FILES); }).then(function () { return self.skipWaiting(); }));
