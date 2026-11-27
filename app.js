@@ -161,15 +161,40 @@
     $('chart').innerHTML = html;
   }
 
-  function renderFair() {
-    var f = L.fairness(state), okay = f.p >= 0.01;
-    $('fair').innerHTML =
-      '<div class="kv"><div><b>' + f.chi.toFixed(1) + '</b><span>카이제곱 (자유도 ' + f.df + ')</span></div>' +
-      '<div><b>' + pct(f.p, 0) + '</b><span>p값</span></div>' +
-      '<div><b class="' + (okay ? 'good' : 'bad') + '">' + (okay ? '치우침 없음' : '치우침 의심') + '</b><span>판정</span></div></div>' +
-      '<p class="note">번호별 출현 횟수가 고르지 않은 정도를 검정한 값입니다. 완전히 공정한 추첨에서도 지금 정도 또는 더 큰 불균형이 나올 확률이 ' + pct(f.p, 0) + '입니다. ' +
-      (okay ? '즉 "자주 나온 번호"와 "덜 나온 번호"의 차이는 우연으로 충분히 설명되고, 특정 번호가 유리하다는 증거는 없습니다.'
-            : '1% 미만이면 우연으로 보기 어려운 치우침입니다.') + '</p>';
+  var integrityDone = false;
+  function renderIntegrity() {
+    if (integrityDone) return;
+    integrityDone = true;
+    var r = L.integrity(draws, { sims: 300 });
+    var bad = 0, warn = 0;
+    var rows = r.tests.map(function (t) {
+      var lvl = t.p < 0.005 ? 'no' : t.p < 0.05 ? 'warn' : 'ok';
+      if (lvl === 'no') bad++; else if (lvl === 'warn') warn++;
+      var ptxt = t.p < 0.001 ? '0.1% 미만' : pct(t.p, t.p < 0.1 ? 1 : 0);
+      return '<div class="tst"><div><div class="nm">' + t.name + '</div><div class="ds">' + t.what + '</div>' +
+        '<div class="ds">' + t.stat + (t.note ? ' · ' + t.note : '') + '</div></div>' +
+        '<div class="rt"><div class="pv">p ' + ptxt + '</div><span class="badge ' + lvl + '">' +
+        (lvl === 'no' ? '의심' : lvl === 'warn' ? '약한 신호' : '정상') + '</span></div></div>';
+    }).join('');
+    var n = r.tests.length, verdict;
+    if (bad) verdict = '<b class="bad">' + n + '개 검정 중 ' + bad + '개에서 우연으로 보기 어려운 치우침이 나왔습니다.</b> 아래에서 어떤 검정인지 확인하세요.';
+    else if (warn) verdict = '<b class="gold">' + n + '개 검정 중 뚜렷한 조작 흔적은 없고, ' + warn + '개가 약한 신호입니다.</b> 검정을 ' + n + '개 하면 공정한 추첨에서도 평균 ' + (n * 0.05).toFixed(1) + '개쯤은 약한 신호가 우연히 나옵니다.';
+    else verdict = '<b class="good">' + n + '개 검정 모두 정상입니다.</b> ' + draws.length + '회 기록에서 무작위 추첨과 구별되는 패턴은 발견되지 않았습니다.';
+    $('integrity').innerHTML = '<p style="margin:12px 0 4px">' + verdict + '</p>' + rows +
+      '<p class="note">이 검정들이 조작을 실제로 잡아내는지도 확인했습니다. 특정 번호를 10% 더 자주 뽑거나, 직전 번호를 피하거나, 과거 조합을 5% 재사용하도록 일부러 조작한 가짜 기록은 모두 "의심"으로 걸렸습니다. ' +
+      '다만 번호 기록에 흔적을 남기지 않는 부정(예: 당첨번호를 미리 아는 경우)은 이 방법으로 알 수 없습니다.</p>';
+
+    var w = r.winners;
+    $('winners').innerHTML =
+      '<p class="note" style="margin-top:0">판매량과 번호 인기도로 예상한 인원보다 실제 1등이 훨씬 많았던 회차입니다. "조작 아니냐"는 말이 가장 많이 나오는 회차들입니다.</p>' +
+      w.top.map(function (x) {
+        return '<div class="pick"><div class="mid"><div class="balls">' + balls(x.nums, 'sm') + '</div>' +
+          '<div class="meta">' + x.n + '회 · ' + date(x.d) + '</div></div>' +
+          '<span class="meta r"><b>' + x.w1 + '명</b><br>예상 ' + x.mu.toFixed(1) + '명</span></div>';
+      }).join('') +
+      '<p class="note">번호를 보면 공통점이 있습니다. 용지에서 한 줄·한 덩어리로 찍히는 번호(20·21·22, 30·31·32, 35·36·37)이거나 사람들이 좋아하는 번호 묶음입니다. ' +
+      '수동으로 같은 모양을 찍는 사람이 많아서 그 모양이 나오면 당첨자가 한꺼번에 몰립니다. 조작이라면 굳이 당첨자가 많이 나오는 번호를 뽑을 이유가 없고, 당첨금 총액은 판매액의 일정 비율로 정해져 있어 운영 쪽 이득도 달라지지 않습니다.</p>' +
+      '<p class="note">참고: 1등이 0명이었던 회차는 ' + w.zero + '회(예상 ' + w.zeroExpected.toFixed(1) + '회)였고, 당첨자 수의 들쭉날쭉함은 순수한 우연의 ' + w.dispersion.toFixed(1) + '배 수준입니다. 1보다 큰 것은 위와 같은 모양 쏠림 때문입니다.</p>';
   }
 
   function renderDetailGrid() {
@@ -451,6 +476,7 @@
       document.querySelectorAll('nav button').forEach(function (b) { b.classList.toggle('on', b === t); });
       document.querySelectorAll('main section').forEach(function (s) { s.classList.toggle('on', s.id === 'tab-' + t.dataset.tab); });
       window.scrollTo(0, 0);
+      if (t.dataset.tab === 'stats' && draws.length) setTimeout(renderIntegrity, 60);   // 계산이 무거워 탭을 열 때 한 번만
     });
     $('go').addEventListener('click', startDraw);
     $('skip').addEventListener('click', function () { M.skip(); });
@@ -523,7 +549,7 @@
     $('headline').textContent = '1~' + last.n + '회 분석 · 최신 ' + date(last.d) + ' 추첨 · 갱신 ' + payload.updated;
     $('roundLabel').textContent = '제 ' + next + '회';
     renderStrategy(); resetMachine(); renderLatest();
-    renderChart(); renderFair(); renderDetailGrid(); renderDetail(); renderShape(); renderRecent();
+    renderChart(); renderDetailGrid(); renderDetail(); renderShape(); renderRecent();
     renderPop();
     renderGrid(); renderMine();
     $('go').disabled = false;

@@ -349,6 +349,137 @@
     return { chi: chi, df: N - 1, p: chiTail(chi, N - 1), expected: e };
   }
 
+  /* ---------- 조작 검증 ----------
+   * "완전한 무작위 추첨"이라면 나올 수 없는 흔적이 있는지 여러 각도에서 본다.
+   * 각 검정의 p 는 "공정한 추첨에서도 이 정도 이상 벗어날 확률"이다. */
+  function zP(z) { return chiTail(z * z, 1); }   // 정규분포 양쪽 꼬리 확률
+
+  function pop2(a, b) {                           // 두 비트마스크의 공통 비트 수
+    var x = a & b; x = x - ((x >>> 1) & 0x55555555); x = (x & 0x33333333) + ((x >>> 2) & 0x33333333);
+    return (((x + (x >>> 4)) & 0x0F0F0F0F) * 0x01010101) >>> 24;
+  }
+
+  function pairChi(list) {                        // 번호 쌍 990개의 동반 출현 불균형
+    var c = new Int32Array(D * D), i, j, k, e = list.length * 15 / 990, chi = 0;
+    for (k = 0; k < list.length; k++) {
+      var a = list[k];
+      for (i = 0; i < PICK; i++) for (j = i + 1; j < PICK; j++) c[a[i] * D + a[j]]++;
+    }
+    for (i = 1; i <= N; i++) for (j = i + 1; j <= N; j++) chi += (c[i * D + j] - e) * (c[i * D + j] - e) / e;
+    return chi;
+  }
+
+  function integrity(draws, opts) {
+    opts = opts || {};
+    var n = draws.length, s = buildState(draws), tests = [], i, j, k;
+    function add(id, name, what, stat, p, note) { tests.push({ id: id, name: name, what: what, stat: stat, p: p, note: note || '' }); }
+
+    // 1. 번호별 출현 횟수
+    var f = fairness(s);
+    add('freq', '번호별 출현 횟수', '특정 번호가 유난히 자주/드물게 나오는가', '카이제곱 ' + f.chi.toFixed(1) + ' (자유도 44)', f.p);
+
+    // 2. 보너스 번호
+    var bc = new Int32Array(D), be = n / N, bchi = 0;
+    for (i = 0; i < n; i++) bc[draws[i].b]++;
+    for (k = 1; k <= N; k++) bchi += (bc[k] - be) * (bc[k] - be) / be;
+    add('bonus', '보너스 번호', '보너스 번호에 치우침이 있는가', '카이제곱 ' + bchi.toFixed(1) + ' (자유도 44)', chiTail(bchi, 44));
+
+    // 3. 시기별 변화 — 전체로는 고르더라도 특정 시기에만 치우쳤을 수 있다(기계·공 교체 등)
+    var eras = 5, size = Math.floor(n / eras), echi = 0, worst = null;
+    for (var e = 0; e < eras; e++) {
+      var lo = e * size, hi = e === eras - 1 ? n : lo + size, cnt = new Int32Array(D), ex = (hi - lo) * PICK / N, ch = 0;
+      for (i = lo; i < hi; i++) for (j = 0; j < PICK; j++) cnt[draws[i].nums[j]]++;
+      for (k = 1; k <= N; k++) ch += (cnt[k] - ex) * (cnt[k] - ex) / ex;
+      ch *= (N - 1) / (N - PICK);
+      echi += ch;
+      var ep = chiTail(ch, 44);
+      if (!worst || ep < worst.p) worst = { p: ep, from: draws[lo].n, to: draws[hi - 1].n };
+    }
+    add('era', '시기별 치우침', '전체 기간을 5개 시기로 나눠, 어느 시기에만 치우침이 있었는가',
+      '카이제곱 합 ' + echi.toFixed(0) + ' (자유도 ' + 44 * eras + ')', chiTail(echi, 44 * eras),
+      '가장 고르지 않았던 시기: ' + worst.from + '~' + worst.to + '회 (그 시기만의 p ' + (worst.p * 100).toFixed(0) + '%)');
+
+    // 4. 번호 쌍 — 특정 번호끼리 유난히 같이 나오는가 (분포가 복잡해 모의 추첨으로 p 를 구한다)
+    var obs = pairChi(draws.map(function (d) { return d.nums; }));
+    var sims = opts.sims || 300, rand = rng(opts.seed || 645), ge = 0, sum = 0;
+    for (var m = 0; m < sims; m++) {
+      var fake = [];
+      for (i = 0; i < n; i++) fake.push(randomCombo(rand));
+      var v = pairChi(fake); sum += v; if (v >= obs) ge++;
+    }
+    add('pair', '번호 쌍의 동반 출현', '특정 번호끼리 유난히 함께 나오는가 (990쌍)',
+      '카이제곱 ' + obs.toFixed(0) + ' (모의 추첨 평균 ' + (sum / sims).toFixed(0) + ')', (ge + 1) / (sims + 1),
+      '공정한 가상 추첨 ' + sims + '벌과 비교');
+
+    // 5. 직전 회차와의 연관 — 지난 번호가 다시 나오거나 일부러 피해지는가
+    var VAR = 0.6146;
+    function lagMean(lag) { var t = 0; for (var a = lag; a < n; a++) t += matchCount(draws[a].nums, draws[a - lag]); return t / (n - lag); }
+    var l1 = lagMean(1);
+    add('lag1', '직전 회차와 겹치는 번호', '지난 회차 번호가 다시 나오는 정도가 기대(0.800개)와 같은가',
+      '평균 ' + l1.toFixed(3) + '개', zP((l1 - 0.8) / Math.sqrt(VAR / (n - 1))));
+    var lm = 0, lc = 0;
+    for (var lag = 2; lag <= 5; lag++) { lm += lagMean(lag) * (n - lag); lc += n - lag; }
+    add('lag25', '2~5회 전과 겹치는 번호', '몇 회차 전 번호와의 연관이 있는가',
+      '평균 ' + (lm / lc).toFixed(3) + '개', zP((lm / lc - 0.8) / Math.sqrt(VAR / lc)));
+
+    // 6. 번호 합 — 평균과 연속 회차 간 상관
+    var MEAN = PICK * (N + 1) / 2, SV = PICK * ((N * N - 1) / 12) * (N - PICK) / (N - 1);
+    var sums = draws.map(function (d) { return d.nums.reduce(function (a, b) { return a + b; }, 0); });
+    var sm = sums.reduce(function (a, b) { return a + b; }, 0) / n, ac = 0;
+    for (i = 1; i < n; i++) ac += (sums[i] - MEAN) * (sums[i - 1] - MEAN);
+    ac /= (n - 1) * SV;
+    add('sum', '번호 합의 평균', '큰 번호 또는 작은 번호 쪽으로 쏠렸는가 (기대 ' + MEAN + ')',
+      '평균 ' + sm.toFixed(1), zP((sm - MEAN) / Math.sqrt(SV / n)));
+    add('sumac', '번호 합의 회차 간 연관', '이번에 합이 크면 다음에도 큰(또는 작은) 경향이 있는가',
+      '상관계수 ' + (ac >= 0 ? '+' : '') + ac.toFixed(3), zP(ac * Math.sqrt(n - 1)));
+
+    // 7. 비슷한 조합의 재등장 — 같은 조합을 돌려 쓰는가
+    var lo32 = new Int32Array(n), hi32 = new Int32Array(n), near4 = 0, near5 = 0, same = 0;
+    for (i = 0; i < n; i++) for (j = 0; j < PICK; j++) {
+      var x = draws[i].nums[j];
+      if (x <= 30) lo32[i] |= 1 << (x - 1); else hi32[i] |= 1 << (x - 31);
+    }
+    for (i = 0; i < n; i++) for (j = i + 1; j < n; j++) {
+      var c = pop2(lo32[i], lo32[j]) + pop2(hi32[i], hi32[j]);
+      if (c >= 4) { near4++; if (c >= 5) { near5++; if (c === 6) same++; } }
+    }
+    var pairs = n * (n - 1) / 2, e4 = pairs * (11115 + 234 + 1) / TOTAL, e5 = pairs * 235 / TOTAL;
+    add('reuse', '비슷한 조합의 재등장', '서로 다른 두 회차의 번호가 4개 이상 겹친 경우의 수',
+      near4 + '쌍 (기대 ' + e4.toFixed(0) + '쌍)', zP((near4 - e4) / Math.sqrt(e4)),
+      '5개 이상 겹침 ' + near5 + '쌍 (기대 ' + e5.toFixed(1) + '), 완전히 같은 조합 ' + same + '쌍 (기대 ' + (pairs / TOTAL).toFixed(2) + ')');
+
+    // 8. 사람들이 많이 고른 번호를 피하거나 골라서 뽑는가
+    //    (당첨자를 줄이거나 늘리려는 조작이라면 번호 인기도와 출현 횟수가 연관된다)
+    var b = popularity(s), mb = 0, mc = 0, sbb = 0, scc = 0, sbc = 0;
+    for (k = 1; k <= N; k++) { mb += b[k] / N; mc += s.count[k] / N; }
+    for (k = 1; k <= N; k++) { sbb += (b[k] - mb) * (b[k] - mb); scc += (s.count[k] - mc) * (s.count[k] - mc); sbc += (b[k] - mb) * (s.count[k] - mc); }
+    var r = sbc / Math.sqrt(sbb * scc);
+    add('popfreq', '인기 번호와 출현 횟수', '사람들이 많이 고르는 번호가 덜(또는 더) 뽑히는가',
+      '상관계수 ' + (r >= 0 ? '+' : '') + r.toFixed(2), zP(0.5 * Math.log((1 + r) / (1 - r)) * Math.sqrt(N - 3)));
+
+    // 1등 당첨자 수: 판매량과 번호 인기도로 설명되지 않는 회차
+    var rows = [], sw = 0, se = 0;
+    draws.forEach(function (d) {
+      if (!popUsable(d)) return;
+      var e1 = d.sales / priceOf(d.n) / TOTAL * shareFactor(s, d.nums);
+      rows.push({ d: d, e: e1 }); sw += d.w1; se += e1;
+    });
+    var scale = sw / se, disp = 0;
+    rows.forEach(function (x) { x.mu = x.e * scale; x.z = (x.d.w1 - x.mu) / Math.sqrt(x.mu); disp += x.z * x.z; });
+    disp /= rows.length - 1;
+    rows.sort(function (a, c2) { return c2.z - a.z; });
+    var zero = rows.filter(function (x) { return x.d.w1 === 0; }).length, zeroExp = 0;
+    rows.forEach(function (x) { zeroExp += Math.exp(-x.mu); });
+
+    return {
+      tests: tests, sims: sims,
+      winners: {
+        dispersion: disp, draws: rows.length, zero: zero, zeroExpected: zeroExp,
+        top: rows.slice(0, 6).map(function (x) { return { n: x.d.n, d: x.d.d, nums: x.d.nums, w1: x.d.w1, mu: x.mu }; })
+      }
+    };
+  }
+
   /* ---------- 번호 하나 자세히 ---------- */
   function numberDetail(draws, s, k) {
     var gaps = [], prev = -1, i;
@@ -513,6 +644,6 @@
     shapeOk: shapeOk, matchCount: matchCount, rankOf: rankOf, prizeOf: prizeOf, priceOf: priceOf,
     popularity: popularity, shareFactor: shareFactor, popValidation: popValidation,
     createBacktest: createBacktest, blocks: blocks, chanceBand: chanceBand, BT_WINDOWS: BT_WINDOWS,
-    fairness: fairness, chiTail: chiTail, numberDetail: numberDetail, patterns: patterns
+    fairness: fairness, chiTail: chiTail, integrity: integrity, numberDetail: numberDetail, patterns: patterns
   };
 });

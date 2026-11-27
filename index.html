@@ -152,6 +152,16 @@ nav {
 nav button { flex: 1; max-width: 150px; border: 0; background: none; color: var(--sub); font: inherit; font-size: 12.5px; padding: 15px 2px; cursor: pointer; }
 nav button.on { color: var(--gold); font-weight: 800; box-shadow: inset 0 2px 0 var(--gold); }
 .empty { color: var(--sub); text-align: center; padding: 18px 0; font-size: 13.5px; }
+.tst { display: flex; justify-content: space-between; gap: 12px; padding: 11px 0; border-top: 1px solid var(--line); }
+.tst:first-of-type { border-top: 0; }
+.tst .nm { font-weight: 700; font-size: 14px; }
+.tst .ds { color: var(--sub); font-size: 12px; margin-top: 2px; }
+.tst .rt { text-align: right; flex: none; }
+.tst .pv { font-weight: 800; font-size: 15px; font-variant-numeric: tabular-nums; }
+.badge { display: inline-block; font-size: 11px; font-weight: 800; padding: 2px 8px; border-radius: 999px; margin-top: 3px; }
+.badge.ok { background: rgba(63,208,168,.15); color: var(--good); }
+.badge.warn { background: rgba(246,196,83,.16); color: var(--gold); }
+.badge.no { background: rgba(255,122,107,.16); color: var(--bad); }
 @media (prefers-reduced-motion: reduce) { .ball.pop, .ball.flip, section.on, .win-glow { animation: none; } }
 </style>
 </head>
@@ -207,8 +217,13 @@ nav button.on { color: var(--gold); font-weight: 800; box-shadow: inset 0 2px 0 
       <div id="chart"></div>
     </div>
     <div class="card">
-      <h2>추첨은 공정한가</h2>
-      <div id="fair"></div>
+      <h2>조작 검증 — 무작위가 아니라면 남을 흔적</h2>
+      <p class="note" style="margin-top:0">추첨이 조작됐다면 번호 기록 어딘가에 치우침이 남습니다. 흔적이 남을 만한 곳을 각각 검정했습니다. <b>p</b>는 "완전히 공정한 추첨에서도 이 정도 이상 벗어날 확률"로, 아주 작을 때(0.5% 미만)만 의심할 만합니다.</p>
+      <div id="integrity"><div class="empty">계산 중…</div></div>
+    </div>
+    <div class="card">
+      <h2>1등이 유난히 많이 나온 회차</h2>
+      <div id="winners"><div class="empty">계산 중…</div></div>
     </div>
     <div class="card">
       <h2>번호 하나 자세히 보기</h2>
