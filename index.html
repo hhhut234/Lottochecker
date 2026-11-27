@@ -222,6 +222,11 @@ nav button.on { color: var(--gold); font-weight: 800; box-shadow: inset 0 2px 0 
       <div id="integrity"><div class="empty">계산 중…</div></div>
     </div>
     <div class="card">
+      <h2>전제를 바꿔 보기 — 조작이라면 이런 식일까</h2>
+      <p class="note" style="margin-top:0">"무작위"를 전제로 치우침을 찾는 대신, 거꾸로 <b>"이런 식으로 조작된다"는 전제</b>를 세워 공정 추첨 가정과 겨루게 했습니다. 어느 쪽이 실제 추첨 결과를 더 잘 맞히는지 봅니다.</p>
+      <div id="scenarios"><div class="empty">계산 중…</div></div>
+    </div>
+    <div class="card">
       <h2>1등이 유난히 많이 나온 회차</h2>
       <div id="winners"><div class="empty">계산 중…</div></div>
     </div>
@@ -279,7 +284,7 @@ nav button.on { color: var(--gold); font-weight: 800; box-shadow: inset 0 2px 0 
     <div id="testOut"></div>
     <div class="card">
       <h2>패턴 자동 탐색 — 조건을 정하지 않고 전부 시험하기</h2>
-      <p class="note" style="margin-top:0">"직전 회차에 7번이 나오면 다음엔 23번이 잘 나온다", "1월에는 42번이 잘 나온다"처럼 <b>조건 → 결과</b> 형태의 가설 약 70만 개를 한꺼번에 시험합니다. 조건은 지난 회차의 번호·합·홀짝·당첨자 수·판매액, 추첨 날짜, 회차 번호 등 310여 가지와 그 둘씩의 조합입니다. 앞쪽 70% 회차에서 가장 강해 보이는 것을 고르고, 나머지 30%에서도 유지되는지 확인합니다.</p>
+      <p class="note" style="margin-top:0">"직전 회차에 7번이 나오면 다음엔 23번이 잘 나온다", "1월에는 42번이 잘 나온다"처럼 <b>조건 → 결과</b> 형태의 가설 약 230만 개를 한꺼번에 시험합니다. 조건은 지난 회차의 번호·합·홀짝·당첨자 수·판매액, 추첨 날짜, 회차 번호 등 310여 가지와 그 둘씩·셋씩의 조합입니다. 앞쪽 70% 회차에서 가장 강해 보이는 것을 고르고, 나머지 30%에서도 유지되는지 확인합니다.</p>
       <div class="row" style="margin-top:12px"><button class="btn primary" id="runPat">패턴 탐색 실행</button></div>
       <div id="patOut"></div>
     </div>

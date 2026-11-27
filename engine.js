@@ -708,22 +708,31 @@
     target('보너스 번호가 홀수인', function (d) { return (d.b & 1) === 1; });
     var NT = targets.length;
 
-    // 회차별로 참인 결과 목록, 그리고 번호 외 결과의 평소 비율
-    var tgStart = new Int32Array(n + 1), tgList = [], rate = new Float64Array(NT), valid = n - T0;
-    for (t = 0; t < n; t++) {
-      tgStart[t] = tgList.length;
-      if (t < T0) continue;
-      for (k = 0; k < NT; k++) if (targets[k].fn(draws[t], t)) { tgList.push(k); rate[k]++; }
+    // 회차 집합을 비트로 표현한다(32회차 = 정수 하나). 조건을 겹치는 계산이 AND 한 번으로 끝난다.
+    var W = (n + 31) >>> 5;
+    function pc(x) {
+      x = x - ((x >>> 1) & 0x55555555);
+      x = (x & 0x33333333) + ((x >>> 2) & 0x33333333);
+      return Math.imul((x + (x >>> 4)) & 0x0F0F0F0F, 0x01010101) >>> 24;
     }
-    tgStart[n] = tgList.length;
-    for (k = N; k < NT; k++) targets[k].p = rate[k] / valid;
+    var maskA = new Uint32Array(W), maskB = new Uint32Array(W);
+    for (t = T0; t < n; t++) (t < split ? maskA : maskB)[t >>> 5] |= 1 << (t & 31);
+
+    // 결과별로 "그 결과가 참이었던 회차" 비트, 그리고 번호 외 결과의 평소 비율
+    var tgBits = [], valid = n - T0;
+    for (k = 0; k < NT; k++) {
+      var tb = new Uint32Array(W), cnt = 0;
+      for (t = T0; t < n; t++) if (targets[k].fn(draws[t], t)) { tb[t >>> 5] |= 1 << (t & 31); cnt++; }
+      tgBits.push(tb);
+      if (k >= N) targets[k].p = cnt / valid;
+    }
 
     /* --- 기본 조건(이번 회차 추첨 전에 알 수 있는 것) --- */
     var conds = [];
     function cond(group, text, fn) {
-      var a = new Uint8Array(n);
-      for (var tt = T0; tt < n; tt++) a[tt] = fn(tt) ? 1 : 0;
-      conds.push({ group: group, text: text, a: a });
+      var A = new Uint32Array(W), B = new Uint32Array(W);
+      for (var tt = T0; tt < n; tt++) if (fn(tt)) (tt < split ? A : B)[tt >>> 5] |= 1 << (tt & 31);
+      conds.push({ group: group, text: text, A: A, B: B });
     }
     for (var lag = 1; lag <= 5; lag++) for (k = 1; k <= N; k++) (function (L, x) {
       cond('lag' + L, (L === 1 ? '직전 회차에 ' : L + '회 전에 ') + x + '번이 나옴', function (tt) { return draws[tt - L].nums.indexOf(x) >= 0; });
@@ -784,91 +793,128 @@
       return (tailCache[key] = tot);
     }
 
-    /* --- 집계 --- */
-    var st = {
-      hyp: 0, condsUsed: 0, strong: 0, strongExp: 0, maxZ: 0,
-      repN: 0, repSame: 0, repMean: 0,                 // 발견 구간에서 강했던 가설의 검증 구간 성적
-      sa: 0, sb: 0, saa: 0, sbb: 0, sab: 0, top: []
-    };
-    var hA = new Int32Array(NT), hB = new Int32Array(NT), both = new Uint8Array(n);
+    /* --- 집계 (조건을 몇 개 묶었는지에 따라 따로) --- */
+    function level() { return { conds: 0, hyp: 0, strong: 0, strongExp: 0, repN: 0, repSame: 0, repMean: 0 }; }
+    var lv = [null, level(), level(), level()];
+    var g = { maxZ: 0, sa: 0, sb: 0, saa: 0, sbb: 0, sab: 0, top: [], cut: 0 };
+    var tailArr = [];
+    for (k = 0; k < NT; k++) tailArr.push(new Float64Array(split + 1).fill(-1));
+    function tailOf(q, nA, p) {
+      var v = tailArr[q][nA];
+      if (v < 0) v = tailArr[q][nA] = tail3(nA, p);
+      return v;
+    }
 
-    function evaluate(arr, ci, cj) {
-      var nA = 0, nB = 0, a, tt;
-      for (tt = T0; tt < split; tt++) nA += arr[tt];
-      if (nA < minA) return;
-      for (tt = split; tt < n; tt++) nB += arr[tt];
-      if (nB < minB) return;
-      hA.fill(0); hB.fill(0);
-      for (tt = T0; tt < n; tt++) {
-        if (!arr[tt]) continue;
-        var h = tt < split ? hA : hB;
-        for (a = tgStart[tt]; a < tgStart[tt + 1]; a++) h[tgList[a]]++;
-      }
-      st.condsUsed++;
+    function evaluate(xA, xB, nA, nB, L, ci, cj, ck) {
+      var s = lv[L], w, a, b;
+      s.conds++;
       for (var q = 0; q < NT; q++) {
         var p = targets[q].p;
         if (p <= 0.02 || p >= 0.98) continue;
-        var zA = (hA[q] - nA * p) / Math.sqrt(nA * p * (1 - p));
-        var zB = (hB[q] - nB * p) / Math.sqrt(nB * p * (1 - p));
-        st.hyp++;
-        st.sa += zA; st.sb += zB; st.saa += zA * zA; st.sbb += zB * zB; st.sab += zA * zB;
-        st.strongExp += tail3(nA, p);
-        var az = Math.abs(zA);
-        if (az > 3) {
-          st.strong++; st.repN++;
-          var signed = zA > 0 ? zB : -zB;
-          if (signed > 0) st.repSame++;
-          st.repMean += signed;
+        var tb = tgBits[q], hA = 0, hB = 0;
+        for (w = 0; w < W; w++) {
+          a = xA[w] & tb[w]; if (a) hA += pc(a);
+          b = xB[w] & tb[w]; if (b) hB += pc(b);
         }
-        if (az > st.maxZ) st.maxZ = az;
-        if (st.top.length < TOPK || az > st.top[st.top.length - 1].az) {
-          st.top.push({ az: az, ci: ci, cj: cj, q: q, nA: nA, nB: nB, rA: hA[q] / nA, rB: hB[q] / nB, zA: zA, zB: zB, p: p });
-          st.top.sort(function (x, y) { return y.az - x.az; });
-          if (st.top.length > TOPK) st.top.pop();
+        var zA = (hA - nA * p) / Math.sqrt(nA * p * (1 - p));
+        var zB = (hB - nB * p) / Math.sqrt(nB * p * (1 - p));
+        s.hyp++;
+        g.sa += zA; g.sb += zB; g.saa += zA * zA; g.sbb += zB * zB; g.sab += zA * zB;
+        s.strongExp += tailOf(q, nA, p);
+        var az = zA < 0 ? -zA : zA;
+        if (az > 3) {
+          s.strong++; s.repN++;
+          var sg = zA > 0 ? zB : -zB;
+          if (sg > 0) s.repSame++;
+          s.repMean += sg;
+          if (az > g.maxZ) g.maxZ = az;
+          if (az > g.cut) {
+            g.top.push({ az: az, ci: ci, cj: cj, ck: ck, q: q, nA: nA, nB: nB, rA: hA / nA, rB: hB / nB, zA: zA, zB: zB, p: p, L: L });
+            g.top.sort(function (x, y) { return y.az - x.az; });
+            if (g.top.length > TOPK) g.top.pop();
+            if (g.top.length === TOPK) g.cut = g.top[TOPK - 1].az;
+          }
         }
       }
     }
 
-    // 작업 순서: 조건 하나씩 → 조건 두 개 조합(서로 다른 종류끼리만)
-    var phase = 0, ci = 0, cj = 0, total = NC + NC * (NC - 1) / 2, doneUnits = 0;
+    var pA = new Uint32Array(W), pB = new Uint32Array(W), tA = new Uint32Array(W), tB = new Uint32Array(W);
+    var triples = opts.triples !== false;
 
-    function step(budget) {
-      var left = budget || 2000;
-      while (left > 0) {
+    function doSingle(i) {
+      var c = conds[i], nA = 0, nB = 0, w;
+      for (w = 0; w < W; w++) { nA += pc(c.A[w]); nB += pc(c.B[w]); }
+      if (nA >= minA && nB >= minB) evaluate(c.A, c.B, nA, nB, 1, i, -1, -1);
+    }
+
+    function doPair(i, j) {
+      var a = conds[i], b = conds[j], nA = 0, nB = 0, w, v;
+      if (a.group === b.group) return;                     // 같은 종류끼리는 묶지 않는다
+      for (w = 0; w < W; w++) { v = pA[w] = a.A[w] & b.A[w]; if (v) nA += pc(v); }
+      if (nA < minA) return;
+      for (w = 0; w < W; w++) { v = pB[w] = a.B[w] & b.B[w]; if (v) nB += pc(v); }
+      if (nB < minB) return;
+      evaluate(pA, pB, nA, nB, 2, i, j, -1);
+      if (!triples) return;
+      for (var x = j + 1; x < NC; x++) {                   // 세 번째 조건을 더한다
+        var c = conds[x];
+        if (c.group === a.group || c.group === b.group) continue;
+        var n3 = 0, m3 = 0;
+        for (w = 0; w < W; w++) { v = tA[w] = pA[w] & c.A[w]; if (v) n3 += pc(v); }
+        if (n3 < minA) continue;
+        for (w = 0; w < W; w++) { v = tB[w] = pB[w] & c.B[w]; if (v) m3 += pc(v); }
+        if (m3 < minB) continue;
+        evaluate(tA, tB, n3, m3, 3, i, j, x);
+      }
+    }
+
+    // 작업 순서: 조건 하나씩 → (조건 둘 + 거기에 하나 더)
+    var phase = 0, ci = 0, cj = 1, total = NC + NC * (NC - 1) / 2, doneUnits = 0;
+
+    /* ms 밀리초 동안만 일하고 돌아온다. 다 끝났으면 true. */
+    function step(ms) {
+      var end = Date.now() + (ms || 40);
+      do {
         if (phase === 0) {
           if (ci >= NC) { phase = 1; ci = 0; cj = 1; continue; }
-          evaluate(conds[ci].a, ci, -1); ci++; doneUnits++; left--;
+          doSingle(ci); ci++; doneUnits++;
         } else {
           if (ci >= NC - 1) return true;
-          if (conds[ci].group !== conds[cj].group) {
-            var x = conds[ci].a, y = conds[cj].a;
-            for (var tt = T0; tt < n; tt++) both[tt] = x[tt] & y[tt];
-            evaluate(both, ci, cj);
-          }
-          doneUnits++; left--;
+          doPair(ci, cj); doneUnits++;
           if (++cj >= NC) { ci++; cj = ci + 1; }
         }
-      }
+      } while (Date.now() < end);
       return phase === 1 && ci >= NC - 1;
     }
 
     function result() {
-      var H = st.hyp || 1;
-      var corr = (st.sab - st.sa * st.sb / H) / Math.sqrt((st.saa - st.sa * st.sa / H) * (st.sbb - st.sb * st.sb / H));
-      var top = st.top.map(function (h) {
+      var H = 0, strong = 0, strongExp = 0, repN = 0, repSame = 0, repMean = 0, L;
+      for (L = 1; L <= 3; L++) {
+        H += lv[L].hyp; strong += lv[L].strong; strongExp += lv[L].strongExp;
+        repN += lv[L].repN; repSame += lv[L].repSame; repMean += lv[L].repMean;
+      }
+      var HH = H || 1;
+      var corr = (g.sab - g.sa * g.sb / HH) / Math.sqrt((g.saa - g.sa * g.sa / HH) * (g.sbb - g.sb * g.sb / HH));
+      var top = g.top.map(function (h) {
+        var text = conds[h.ci].text;
+        if (h.cj >= 0) text += ' + ' + conds[h.cj].text;
+        if (h.ck >= 0) text += ' + ' + conds[h.ck].text;
         return {
-          cond: conds[h.ci].text + (h.cj >= 0 ? ' + ' + conds[h.cj].text : ''),
-          result: h.zA > 0 ? targets[h.q].up : targets[h.q].down,
+          cond: text, result: h.zA > 0 ? targets[h.q].up : targets[h.q].down, level: h.L,
           nA: h.nA, nB: h.nB, rA: h.rA, rB: h.rB, zA: h.zA, zB: h.zB, p: h.p,
           kept: h.zA * h.zB > 0 && Math.abs(h.zB) > 2
         };
       });
       return {
-        hypotheses: st.hyp, baseConds: NC, condsUsed: st.condsUsed, targets: NT,
-        strong: st.strong, strongExpected: st.strongExp, maxZ: st.maxZ, corr: corr,
-        repN: st.repN, repSame: st.repSame, repMean: st.repN ? st.repMean / st.repN : 0,
-        // 강했던 가설들이 검증 구간에서 같은 방향으로 나온 비율이 50%에서 얼마나 벗어났나
-        repZ: st.repN ? (st.repSame - st.repN / 2) / Math.sqrt(st.repN / 4) : 0,
+        hypotheses: H, baseConds: NC, targets: NT,
+        levels: [1, 2, 3].map(function (x) {
+          var s = lv[x];
+          return { level: x, conds: s.conds, hyp: s.hyp, strong: s.strong, strongExp: s.strongExp,
+                   repN: s.repN, repShare: s.repN ? s.repSame / s.repN : 0, repMean: s.repN ? s.repMean / s.repN : 0 };
+        }),
+        strong: strong, strongExpected: strongExp, maxZ: g.maxZ, corr: corr,
+        repN: repN, repSame: repSame, repMean: repN ? repMean / repN : 0,
+        repZ: repN ? (repSame - repN / 2) / Math.sqrt(repN / 4) : 0,
         top: top, confirmed: top.filter(function (h) { return h.kept; }).length,
         discFrom: draws[T0].n, discTo: draws[split - 1].n, holdFrom: draws[split].n, holdTo: draws[n - 1].n
       };
@@ -879,8 +925,105 @@
 
   function patternSearch(draws, opts) {
     var job = createPatternSearch(draws, opts);
-    while (!job.step(5000)) { /* 끝까지 */ }
+    while (!job.step(200)) { /* 끝까지 */ }
     return job.result();
+  }
+
+  /* ---------- 전제를 바꿔 보기: 조작 시나리오 ----------
+   * "공정한 추첨"이라는 전제 대신 "이런 식으로 조작된다"는 전제를 세우고,
+   * 어느 쪽이 실제 추첨 결과를 더 잘 설명하는지 겨룬다.
+   * 매 회차를 그 전까지의 기록만으로 예측하게 하고(조작의 세기도 과거 기록으로 맞춘다),
+   * 실제 결과에 얼마나 높은 확률을 줬는지를 공정 추첨 가정과 비교한다.
+   *   이득 > 0 : 그 시나리오가 공정 추첨보다 실제 결과를 잘 설명했다 → 의심
+   *   이득 ≤ 0 : 공정 추첨 가정이 더 잘 맞는다 */
+  function scenarios(draws, opts) {
+    opts = opts || {};
+    var n = draws.length, start = opts.start || 100, s = buildState(draws, start), k;
+    var LAM = [0, -0.2, -0.1, -0.05, 0.05, 0.1, 0.2];
+    var LAMP = [0, -0.6, -0.3, -0.15, 0.15, 0.3, 0.6];
+
+    function expW(z, lam, out) { for (var x = 1; x <= N; x++) out[x] = z ? Math.exp(lam * z[x]) : 1; }
+    var models = [
+      { id: 'freq', name: '공마다 나올 확률이 다르다', grid: LAM,
+        what: '특정 공이 무겁거나 가벼워 계속 유리/불리하다(+), 또는 통계가 고르게 보이도록 덜 나온 번호를 일부러 뽑는다(−)',
+        w: function (c, lam, out) { expW(c.zAll, lam, out); },
+        say: function (lam) { return lam > 0 ? '많이 나온 번호가 계속 잘 나온다' : '덜 나온 번호를 채워 넣는다'; } },
+      { id: 'recent', name: '최근의 공·기계가 치우쳐 있다', grid: LAM,
+        what: '공 세트나 기계가 바뀌어, 최근 100회에 많이 나온 번호가 계속 유리하다(+) 또는 불리하다(−)',
+        w: function (c, lam, out) { expW(c.zRec, lam, out); },
+        say: function (lam) { return lam > 0 ? '최근 많이 나온 번호가 계속 나온다' : '최근 많이 나온 번호를 피한다'; } },
+      { id: 'prev', name: '직전 회차 번호를 다시 뽑거나 피한다', grid: LAMP,
+        what: '지난주 번호를 일부러 다시 내거나(+), 겹치지 않게 피한다(−)',
+        w: function (c, lam, out) { for (var x = 1; x <= N; x++) out[x] = c.inPrev[x] ? Math.exp(lam) : 1; },
+        say: function (lam) { return lam > 0 ? '지난주 번호를 다시 낸다' : '지난주 번호를 피한다'; } },
+      { id: 'gap', name: '오래 안 나온 번호를 일부러 뽑는다', grid: LAM,
+        what: '오래 안 나온 번호를 챙겨서 내거나(+), 계속 묵혀 둔다(−)',
+        w: function (c, lam, out) { expW(c.zGap, lam, out); },
+        say: function (lam) { return lam > 0 ? '오래 안 나온 번호를 낸다' : '오래 안 나온 번호를 계속 묵힌다'; } },
+      { id: 'pop', name: '많이 팔린 번호를 피해서(또는 골라서) 뽑는다', grid: LAM,
+        what: '당첨자를 줄이려고 사람들이 많이 고른 번호를 피하거나(−), 당첨자를 늘리려고 고른다(+)',
+        w: function (c, lam, out) { expW(c.zPop, lam, out); },
+        say: function (lam) { return lam > 0 ? '인기 번호를 골라 뽑는다' : '인기 번호를 피해 뽑는다'; } },
+      { id: 'hype', name: '판매가 줄면 당첨자를 늘려 흥행시킨다', grid: LAM,
+        what: '직전 회차 판매액이 줄었으면 인기 번호를, 늘었으면 비인기 번호를 뽑는다(+), 또는 그 반대(−)',
+        w: function (c, lam, out) { expW(c.zPop, c.salesFell ? lam : -lam, out); },
+        say: function (lam) { return lam > 0 ? '판매가 줄면 인기 번호를 뽑는다' : '판매가 줄면 비인기 번호를 뽑는다'; } }
+    ];
+    models.forEach(function (m) { m.cum = new Float64Array(m.grid.length); m.sum = 0; m.sq = 0; m.ll = new Float64Array(m.grid.length); });
+
+    var w = new Float64Array(N + 1), y = new Uint8Array(N + 1), fair = -N * BASE_LOSS, used = 0;
+    function logLik() {
+      var tot = 0, ll = 0, x;
+      for (x = 1; x <= N; x++) tot += w[x];
+      for (x = 1; x <= N; x++) {
+        var p = Math.min(0.9, PICK * w[x] / tot);
+        ll += y[x] ? Math.log(p) : Math.log(1 - p);
+      }
+      return ll;
+    }
+
+    for (var t = start; t < n; t++) {
+      var d = draws[t], prev = draws[t - 1], c100 = new Int32Array(N + 1), a, b;
+      for (a = t - 100; a < t; a++) for (b = 0; b < PICK; b++) c100[draws[a].nums[b]]++;
+      var pop = s.pop.n >= POP_MIN ? popularity(s) : null;
+      var ctx = {
+        zAll: zs(function (x) { return s.count[x]; }),
+        zRec: zs(function (x) { return c100[x]; }),
+        zGap: zs(function (x) { return gapOf(s, x); }),
+        zPop: pop ? zs(function (x) { return pop[x]; }) : null,
+        inPrev: new Uint8Array(N + 1),
+        salesFell: prev.sales < draws[t - 2].sales
+      };
+      for (b = 0; b < PICK; b++) ctx.inPrev[prev.nums[b]] = 1;
+      y.fill(0);
+      for (b = 0; b < PICK; b++) y[d.nums[b]] = 1;
+
+      models.forEach(function (m) {
+        var best = 0, i;
+        for (i = 1; i < m.grid.length; i++) if (m.cum[i] > m.cum[best] + 1e-9) best = i;   // 지금까지 가장 잘 맞은 세기
+        for (i = 0; i < m.grid.length; i++) { m.w(ctx, m.grid[i], w); m.ll[i] = logLik(); }
+        var gain = m.ll[best] - fair;
+        m.sum += gain; m.sq += gain * gain;
+        for (i = 0; i < m.grid.length; i++) m.cum[i] += m.ll[i];
+      });
+      used++;
+      addDraw(s, d);
+    }
+
+    return {
+      draws: used, from: draws[start].n, to: draws[n - 1].n,
+      models: models.map(function (m) {
+        var mean = m.sum / used, sd = Math.sqrt(Math.max(1e-12, m.sq / used - mean * mean)), best = 0, i;
+        for (i = 1; i < m.grid.length; i++) if (m.cum[i] > m.cum[best] + 1e-9) best = i;
+        return {
+          id: m.id, name: m.name, what: m.what,
+          gain: m.sum,                                  // 전체 기간의 설명력 이득(로그 우도)
+          z: m.sum === 0 ? 0 : mean / (sd / Math.sqrt(used)),
+          lambda: m.grid[best], picked: m.grid[best] === 0 ? '조작 없음(공정 추첨)' : m.say(m.grid[best]),
+          fitGain: m.cum[best] - m.cum[0]               // 끼워 맞췄을 때의 이득(참고용, 과대평가됨)
+        };
+      })
+    };
   }
 
   /* ---------- 백테스트 ---------- */
@@ -989,6 +1132,7 @@
     gapOf: gapOf, numberScores: numberScores, generate: generate, randomCombo: randomCombo,
     shapeOk: shapeOk, matchCount: matchCount, rankOf: rankOf, prizeOf: prizeOf, priceOf: priceOf,
     popularity: popularity, shareFactor: shareFactor, popValidation: popValidation,
+    scenarios: scenarios,
     BT_SHOW: BT_SHOW, patternSearch: patternSearch, createPatternSearch: createPatternSearch,
     createBacktest: createBacktest, blocks: blocks, chanceBand: chanceBand, BT_WINDOWS: BT_WINDOWS,
     fairness: fairness, chiTail: chiTail, integrity: integrity, numberDetail: numberDetail, patterns: patterns

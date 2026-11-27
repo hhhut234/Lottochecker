@@ -99,6 +99,7 @@ function showPatterns(label, ps) {
   console.log(`${label}: 기본 조건 ${ps.baseConds}개, 결과 ${ps.targets}종, 가설 ${ps.hypotheses.toLocaleString()}개`);
   console.log(`  발견 구간 |z|>3: ${ps.strong}개 (우연 기대 ${ps.strongExpected.toFixed(0)}개), 최대 |z| ${ps.maxZ.toFixed(2)}, 발견-검증 상관 ${ps.corr.toFixed(4)}`);
   console.log(`  강했던 ${ps.repN}개가 검증 구간에서 같은 방향 ${(ps.repSame / ps.repN * 100).toFixed(1)}% (우연 50%), 평균 효과 z ${ps.repMean.toFixed(3)}, 상위 ${ps.top.length}개 중 재현 ${ps.confirmed}개`);
+  ps.levels.forEach(l => console.log(`    조건 ${l.level}개: 가설 ${l.hyp.toLocaleString()}개, 강함 ${l.strong} (기대 ${l.strongExp.toFixed(0)}), 재현 방향 일치 ${(l.repShare * 100).toFixed(1)}%, 평균 효과 ${l.repMean.toFixed(3)}`));
   ps.top.slice(0, 4).forEach(h => console.log('   ', h.cond, '→', h.result, '| 발견', (h.rA * 100).toFixed(0) + '%/' + h.nA, 'z', h.zA.toFixed(1), '| 검증', (h.rB * 100).toFixed(0) + '%/' + h.nB, 'z', h.zB.toFixed(1)));
 }
 let tp = Date.now();

@@ -184,6 +184,23 @@
       '<p class="note">이 검정들이 조작을 실제로 잡아내는지도 확인했습니다. 특정 번호를 10% 더 자주 뽑거나, 직전 번호를 피하거나, 과거 조합을 5% 재사용하도록 일부러 조작한 가짜 기록은 모두 "의심"으로 걸렸습니다. ' +
       '다만 번호 기록에 흔적을 남기지 않는 부정(예: 당첨번호를 미리 아는 경우)은 이 방법으로 알 수 없습니다.</p>';
 
+    var sc = L.scenarios(draws), anyWin = false;
+    var scRows = sc.models.map(function (m) {
+      var lvl = m.z > 3 ? 'no' : m.z > 2 ? 'warn' : 'ok';
+      if (lvl !== 'ok') anyWin = true;
+      return '<div class="tst"><div><div class="nm">' + m.name + '</div><div class="ds">' + m.what + '</div>' +
+        '<div class="ds">과거 기록에 가장 잘 맞은 설정: ' + m.picked + '</div></div>' +
+        '<div class="rt"><div class="pv">' + signed(m.gain, 1) + '</div><span class="badge ' + lvl + '">' +
+        (lvl === 'no' ? '공정보다 잘 맞음' : lvl === 'warn' ? '약한 신호' : '공정이 더 맞음') + '</span></div></div>';
+    }).join('');
+    $('scenarios').innerHTML =
+      '<p style="margin:12px 0 4px">' + (anyWin
+        ? '<b class="gold">공정 추첨 가정보다 실제 결과를 더 잘 설명한 시나리오가 있습니다.</b> 아래에서 확인하세요.'
+        : '<b class="good">' + sc.models.length + '가지 조작 시나리오 모두 공정 추첨 가정보다 실제 결과를 못 맞혔습니다.</b>') + '</p>' + scRows +
+      '<p class="note">' + sc.from + '~' + sc.to + '회 각각을, 그 전까지의 기록만 보고 "이 시나리오라면 어떤 번호가 나올 확률이 높은가"를 예측하게 한 뒤 실제 결과와 대조했습니다. 조작의 방향과 세기도 과거 기록에 가장 잘 맞는 값으로 그때그때 골랐습니다. ' +
+      '오른쪽 숫자는 공정 추첨 가정 대비 설명력의 차이로, <b>0보다 크면 그 시나리오가 실제 추첨을 더 잘 설명했다</b>는 뜻입니다. 모두 음수라는 것은, 조작을 가정하면 오히려 예측이 나빠진다는 뜻입니다.</p>' +
+      '<p class="note">이 비교가 실제 조작을 알아보는지도 확인했습니다. 직전 번호를 피하게 조작한 가짜 기록에서는 해당 시나리오가 +48로, 특정 번호를 편중시킨 가짜 기록에서는 "공마다 확률이 다르다"가 +41로 공정 가정을 크게 이겼습니다.</p>';
+
     var w = r.winners;
     $('winners').innerHTML =
       '<p class="note" style="margin-top:0">판매량과 번호 인기도로 예상한 인원보다 실제 1등이 훨씬 많았던 회차입니다. "조작 아니냐"는 말이 가장 많이 나오는 회차들입니다.</p>' +
@@ -412,7 +429,7 @@
     var job = L.createPatternSearch(draws);
     $('patOut').innerHTML = '<progress id="patProg" value="0" max="' + job.total + '"></progress><p class="note" id="patState"></p>';
     (function loop() {
-      var fin = job.step(2500);
+      var fin = job.step(45);
       $('patProg').value = job.done();
       $('patState').textContent = '조건 조합 ' + job.done().toLocaleString('ko-KR') + ' / ' + job.total.toLocaleString('ko-KR') + ' 확인 중';
       if (!fin) return setTimeout(loop, 0);
@@ -440,8 +457,13 @@
       '<p style="margin:12px 0 4px">' + (signal
         ? '<b class="gold">발견 구간에서 강했던 패턴이 처음 보는 회차에서도 우연 이상으로 유지됐습니다.</b> 아래 목록에서 "재현됨"으로 표시된 것을 확인하세요. 다음 회차들에서도 이어지는지 지켜볼 만합니다.'
         : '<b class="good">이상한 점은 나오지 않았습니다.</b> 발견 구간에서 강해 보인 패턴은 ' + r.strong.toLocaleString('ko-KR') + '개로 우연만으로 기대되는 수(' + Math.round(r.strongExpected).toLocaleString('ko-KR') + '개)와 비슷하고, 이들이 처음 보는 회차에서 같은 방향으로 나온 비율도 ' + pct(share, 0) + '로 동전 던지기(50%)보다 높지 않았습니다.') + '</p>' +
+      '<div class="tscroll" style="margin-top:10px"><table><thead><tr><th>묶은 조건 수</th><th>가설 수</th><th>강했던 것</th><th>우연 기대</th><th>검증에서 같은 방향</th></tr></thead><tbody>' +
+      r.levels.map(function (l) {
+        return '<tr><td>' + l.level + '개</td><td>' + l.hyp.toLocaleString('ko-KR') + '</td><td>' + l.strong.toLocaleString('ko-KR') + '</td><td>' +
+          Math.round(l.strongExp).toLocaleString('ko-KR') + '</td><td>' + (l.repN ? pct(l.repShare, 0) : '—') + '</td></tr>';
+      }).join('') + '</tbody></table></div>' +
       '<h3>발견 구간에서 가장 강했던 ' + r.top.length + '개</h3>' + rows +
-      '<p class="note">기본 조건 ' + r.baseConds + '개와 그 둘씩의 조합에, 결과 ' + r.targets + '종(번호 45개, 번호 합·홀짝·연속번호·번호대, 1등 당첨자 수 등)을 곱해 시험했습니다. ' + r.discFrom + '~' + r.discTo + '회에서 찾고 ' + r.holdFrom + '~' + r.holdTo + '회로 검증했습니다.</p>' +
+      '<p class="note">기본 조건 ' + r.baseConds + '개와 그 둘씩·셋씩의 조합에, 결과 ' + r.targets + '종(번호 45개, 번호 합·홀짝·연속번호·번호대, 1등 당첨자 수 등)을 곱해 시험했습니다. ' + r.discFrom + '~' + r.discTo + '회에서 찾고 ' + r.holdFrom + '~' + r.holdTo + '회로 검증했습니다.</p>' +
       '<p class="note">가설을 ' + Math.round(r.hypotheses / 10000) + '만 개 시험하면 아무 패턴이 없어도 "48%나 나왔다(평소 13%)" 같은 것이 반드시 수천 개 나옵니다. 그래서 찾는 데 쓰지 않은 회차에서 다시 확인해야 합니다. ' +
       '상위 ' + r.top.length + '개 중 "재현됨"은 ' + r.confirmed + '개인데, 우연만으로도 평균 ' + expKept.toFixed(1) + '개쯤 나오는 수준입니다. ' +
       '이 탐색이 진짜 패턴을 놓치지 않는지도 확인했습니다. "직전 회차에 7번이 나오면 23번이 잘 나온다"는 규칙을 일부러 심은 가짜 기록에서는 그 규칙이 1위로 잡히고 검증 구간에서도 유지됐습니다.</p>';

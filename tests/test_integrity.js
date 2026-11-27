@@ -59,6 +59,25 @@ const p3 = pOf(reuse, 'reuse');
 console.log('조작 시험 3 (조합 재사용): 재등장 p', (p3 * 100).toFixed(3) + '%');
 assert.ok(p3 < 0.01);
 
+// 조작 시나리오 비교: 실제 데이터
+function showScen(label, sc) {
+  console.log(label + ` (${sc.from}~${sc.to}회)`);
+  sc.models.forEach(m => console.log('  ', m.name.padEnd(24), '이득', m.gain.toFixed(2).padStart(7), 'z', m.z.toFixed(2).padStart(6), '|', m.picked));
+}
+const scReal = L.scenarios(draws);
+showScen('시나리오 비교 — 실제 추첨', scReal);
+scReal.models.forEach(m => assert.ok(Number.isFinite(m.gain) && Number.isFinite(m.z)));
+
+// 시나리오 비교가 실제 조작을 알아보는지: 조작한 가짜 기록에서는 해당 시나리오가 이겨야 한다
+const scAvoid = L.scenarios(avoid);
+showScen('시나리오 비교 — 직전 번호를 피하게 조작한 기록', scAvoid);
+const mPrev = scAvoid.models.find(m => m.id === 'prev');
+assert.ok(mPrev.z > 3 && mPrev.lambda < 0, '직전 번호 회피 시나리오가 이겨야 한다');
+
+const scBias = L.scenarios(biased);
+showScen('시나리오 비교 — 7번을 편중시킨 기록', scBias);
+assert.ok(scBias.models.find(m => m.id === 'freq').z > 2, '공 편향 시나리오가 이겨야 한다');
+
 // (4) 완전히 공정한 가짜 추첨 → 대부분의 검정을 통과해야 한다
 const fair = L.integrity(fake(rand => L.randomCombo(rand)), { sims: 60 });
 const flagged = fair.tests.filter(t => t.id !== 'popfreq' && t.p < 0.005).map(t => t.id);
