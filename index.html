@@ -277,6 +277,12 @@ nav button.on { color: var(--gold); font-weight: 800; box-shadow: inset 0 2px 0 
       <progress id="testProg" value="0" max="1" hidden></progress>
     </div>
     <div id="testOut"></div>
+    <div class="card">
+      <h2>패턴 자동 탐색 — 조건을 정하지 않고 전부 시험하기</h2>
+      <p class="note" style="margin-top:0">"직전 회차에 7번이 나오면 다음엔 23번이 잘 나온다", "1월에는 42번이 잘 나온다"처럼 <b>조건 → 번호</b> 형태의 가설 수천 개를 한꺼번에 시험합니다. 앞쪽 70% 회차에서 가장 강해 보이는 것을 고르고, 나머지 30%에서도 유지되는지 확인합니다.</p>
+      <div class="row" style="margin-top:12px"><button class="btn primary" id="runPat">패턴 탐색 실행</button></div>
+      <div id="patOut"></div>
+    </div>
   </section>
 
   <!-- 내 번호 -->

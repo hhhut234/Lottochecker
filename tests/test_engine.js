@@ -87,6 +87,21 @@ assert.ok(Math.abs(L.chanceBand(5755) - 0.0207) < 0.0005);
 console.log('최근 N회만 보고 추천:', L.BT_WINDOWS.map(w => `${w}회 ${(res['w' + w].matches / res['w' + w].tickets).toFixed(3)}`).join(' / '));
 L.BT_WINDOWS.forEach(w => assert.strictEqual(res['w' + w].tickets, (draws.length - 100) * 5));
 
+// 신경망: 처음 보는 회차에서의 오차를 "아무것도 모를 때"와 비교
+const nnr = res.nn;
+assert.strictEqual(nnr.tickets, (draws.length - 100) * 5);
+console.log('신경망 평균 적중', (nnr.matches / nnr.tickets).toFixed(3),
+  '| 예측 오차', (nnr.loss / (draws.length - 100)).toFixed(4), '(기준', nnr.baseLoss.toFixed(4) + ')');
+assert.ok(Number.isFinite(nnr.loss));
+
+// 패턴 자동 탐색
+const ps = L.patternSearch(draws);
+console.log(`패턴 탐색: 가설 ${ps.hypotheses}개, 발견 구간에서 강해 보인 것 ${ps.strong}개 (우연 기대 ${ps.strongExpected.toFixed(0)}개), 발견-검증 상관 ${ps.corr.toFixed(3)}`);
+console.log(`  상위 ${ps.top.length}개 중 검증 구간에서 같은 방향 ${ps.sameSign}개, 뚜렷이 재현 ${ps.confirmed}개`);
+ps.top.slice(0, 4).forEach(h => console.log('   ', h.cond, '→', h.target + '번', '발견', (h.rA * 100).toFixed(0) + '%', 'z', h.zA.toFixed(1), '| 검증', (h.rB * 100).toFixed(0) + '%', 'z', h.zB.toFixed(1)));
+assert.ok(ps.hypotheses > 3000);
+assert.ok(Math.abs(ps.corr) < 0.1);
+
 // 덜 고르는 번호 전략은 동시 당첨 배수가 무작위보다 낮아야 한다
 assert.ok(res.unpop.share / res.unpop.shareN < res.random.share / res.random.shareN - 0.05);
 

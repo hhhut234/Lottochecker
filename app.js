@@ -333,8 +333,7 @@
 
   function renderBlocks() {
     if (!lastBt) return;
-    var names = { random: '무작위' };
-    Object.keys(L.STRATEGIES).forEach(function (k) { names[k] = L.STRATEGIES[k].name; });
+    var names = btNames();
     var size = blockUi.size, st = blockStats(blockUi.key, size), rnd = blockStats('random', size);
     var n = st.list.length, span = st.band, i;
     st.list.forEach(function (b) { span = Math.max(span, Math.abs(b.avg - 0.8)); });
@@ -360,7 +359,7 @@
       '<div class="seg">' + BLOCK_SIZES.map(function (s) {
         return '<button data-bs="' + s + '"' + (s === size ? ' class="on"' : '') + '>' + s + '회씩</button>';
       }).join('') + '</div>' +
-      '<div class="seg" style="margin-top:8px">' + L.BT_KEYS.map(function (k) {
+      '<div class="seg" style="margin-top:8px">' + L.BT_SHOW.map(function (k) {
         return '<button data-bk="' + k + '"' + (k === blockUi.key ? ' class="on"' : '') + '>' + names[k] + '</button>';
       }).join('') + '</div>' +
       svg +
@@ -385,9 +384,53 @@
       '<p class="note">매 회차마다 직전 N회에 많이 나온 번호 위주로 5조합을 추천했을 때의 결과입니다. 우연 범위는 ±' + band.toFixed(3) + '입니다.</p>';
   }
 
-  function renderTest(res) {
-    var names = { random: '무작위' }, keys = L.BT_KEYS;
+  function btNames() {
+    var names = { random: '무작위', nn: '신경망 (딥러닝)' };
     Object.keys(L.STRATEGIES).forEach(function (k) { names[k] = L.STRATEGIES[k].name; });
+    return names;
+  }
+
+  function nnHtml(res) {
+    var r = res.nn, n = r.tickets / 5, loss = r.loss / n, base = r.baseLoss, gain = (base - loss) / base;
+    var learned = gain > 0.002;
+    return '<div class="kv">' +
+        '<div><b>' + loss.toFixed(4) + '</b><span>신경망의 예측 오차</span></div>' +
+        '<div><b>' + base.toFixed(4) + '</b><span>아무것도 모를 때의 오차</span></div>' +
+        '<div><b class="' + (learned ? 'good' : '') + '">' + signed(gain * 100, 2) + '%</b><span>개선 폭</span></div></div>' +
+      '<p class="note">번호마다 최근 5·10·20·50·100회 출현 횟수, 미출현 기간, 직전 회차 출현 여부, 전체 출현 횟수를 넣어 "다음 회차에 나올 확률"을 예측하게 한 2층 신경망입니다. 매 회차를 그 전까지의 데이터로만 학습한 상태에서 예측했습니다.</p>' +
+      '<p class="note">' + (learned
+        ? '오차가 기준보다 줄었습니다. 다만 위 표의 평균 적중 개수가 우연 범위 안이라면 실제로 쓸 수 있는 수준은 아닙니다.'
+        : '예측 오차가 "모든 번호가 6/45 확률"이라고만 답했을 때와 사실상 같습니다. 신경망이 학습 끝에 도달한 결론이 "과거 기록에는 쓸 정보가 없다"였다는 뜻입니다.') + '</p>';
+  }
+
+  /* ---------- 패턴 자동 탐색 ---------- */
+  function runPatterns() {
+    $('patOut').innerHTML = '<div class="empty">탐색 중…</div>';
+    setTimeout(function () {
+      var r = L.patternSearch(draws);
+      var rows = r.top.map(function (h) {
+        var keep = h.zA * h.zB > 0 && Math.abs(h.zB) > 2;
+        return '<div class="tst"><div><div class="nm">' + h.cond + ' → ' + h.target + '번이 ' + (h.zA > 0 ? '더' : '덜') + ' 나온다</div>' +
+          '<div class="ds">발견 구간 ' + pct(h.rA, 0) + ' (' + h.nA + '회 중) · 검증 구간 ' + pct(h.rB, 0) + ' (' + h.nB + '회 중) · 기대 13%</div></div>' +
+          '<div class="rt"><span class="badge ' + (keep ? 'no' : 'ok') + '">' + (keep ? '재현됨' : '사라짐') + '</span></div></div>';
+      }).join('');
+      $('patOut').innerHTML =
+        '<div class="kv" style="margin-top:10px">' +
+          '<div><b>' + r.hypotheses.toLocaleString('ko-KR') + '</b><span>시험한 가설 수</span></div>' +
+          '<div><b>' + r.strong + '</b><span>발견 구간에서 강해 보인 것</span></div>' +
+          '<div><b>' + Math.round(r.strongExpected) + '</b><span>우연만으로 기대되는 수</span></div>' +
+          '<div><b>' + r.confirmed + ' / ' + r.top.length + '</b><span>상위 가설 중 재현된 것</span></div></div>' +
+        '<p style="margin:12px 0 4px">' + (r.confirmed === 0
+          ? '<b class="good">발견 구간에서 가장 강해 보였던 패턴 ' + r.top.length + '개 중, 처음 보는 회차에서도 유지된 것은 하나도 없습니다.</b>'
+          : '<b class="gold">상위 ' + r.top.length + '개 중 ' + r.confirmed + '개가 검증 구간에서도 같은 방향으로 나왔습니다.</b> 가설을 많이 시험하면 우연히 재현되는 것도 생기므로, 다음 회차들에서 계속 유지되는지 지켜봐야 합니다.') + '</p>' +
+        rows +
+        '<p class="note">' + r.discFrom + '~' + r.discTo + '회에서 패턴을 찾고, ' + r.holdFrom + '~' + r.holdTo + '회로 검증했습니다. 가설을 수천 개 시험하면 아무 패턴이 없어도 그럴듯해 보이는 것이 수백 개 나옵니다(위의 ' + r.strong + '개 대 기대 ' + Math.round(r.strongExpected) + '개). ' +
+        '그래서 "찾은 데이터"가 아니라 "처음 보는 데이터"에서 다시 확인해야 합니다. 전체 가설에 대해 발견 구간과 검증 구간의 결과가 얼마나 닮았는지를 나타내는 상관계수는 ' + signed(r.corr, 3) + '로, 0에 가까울수록 발견 구간의 결과가 검증 구간과 무관했다는 뜻입니다.</p>';
+    }, 30);
+  }
+
+  function renderTest(res) {
+    var names = btNames(), keys = L.BT_SHOW;
     var tickets = res.random.tickets;
     var expected = 0.8;                                   // 한 조합이 맞히는 번호 수의 이론 기대값 (6×6/45)
     var se = Math.sqrt(0.6146 / tickets), band = 2 * se;  // 우연히 벌어질 수 있는 폭(약 95%)
@@ -406,7 +449,7 @@
       return k !== 'random' && Math.abs(res[k].matches / res[k].tickets - expected) > band;
     });
     var verdict = outside.length === 0
-      ? '네 분석법 모두 평균 적중 개수가 무작위 기대값(0.800)에서 우연 범위(±' + band.toFixed(3) + ') 안에 있습니다. 즉 과거 데이터에서 <b>번호를 더 잘 맞히는 방법은 없었습니다.</b>'
+      ? '신경망을 포함한 ' + (keys.length - 1) + '가지 방법 모두 평균 적중 개수가 무작위 기대값(0.800)에서 우연 범위(±' + band.toFixed(3) + ') 안에 있습니다. 즉 과거 데이터에서 <b>번호를 더 잘 맞히는 방법은 없었습니다.</b>'
       : outside.map(function (k) { return names[k]; }).join(', ') + '이(가) 우연 범위(±' + band.toFixed(3) + ')를 벗어났습니다. 다만 여러 방법을 동시에 시험하면 우연히 벗어나는 경우도 생기므로, 구간을 바꿔도 같은 방향으로 유지되는지 확인이 필요합니다.';
     var un = res.unpop.share / res.unpop.shareN, rn = res.random.share / res.random.shareN;
     verdict += ' 차이가 난 것은 당첨금 쪽입니다. 「' + names.unpop + '」는 동시 당첨 배수가 ×' + un.toFixed(2) + '로 무작위(×' + rn.toFixed(2) +
@@ -416,6 +459,7 @@
       '<div class="card"><h2>결론</h2><p style="margin:0">' + verdict + '</p></div>' +
       '<div class="card"><h2>구간별로 끊어 보기</h2><div id="blockOut"></div></div>' +
       '<div class="card"><h2>최근 몇 회만 보고 추천했다면</h2><div id="windowOut"></div></div>' +
+      '<div class="card"><h2>신경망(딥러닝)은 무엇을 배웠나</h2>' + nnHtml(res) + '</div>' +
       '<div class="card"><h2>조합당 평균 적중 개수</h2><div class="kv">' +
         '<div><b>' + tickets.toLocaleString('ko-KR') + '</b><span>방법별 시험 조합 수</span></div>' +
         '<div><b>0.800</b><span>이론 기대값</span></div>' +
@@ -510,6 +554,7 @@
       renderDetailGrid(); renderDetail();
     });
     $('runTest').addEventListener('click', runTest);
+    $('runPat').addEventListener('click', runPatterns);
     $('testOut').addEventListener('click', function (e) {
       var t = e.target.closest('button'); if (!t) return;
       if (t.dataset.bs) blockUi.size = +t.dataset.bs;

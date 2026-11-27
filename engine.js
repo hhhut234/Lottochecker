@@ -553,6 +553,187 @@
     return { fitFrom: ok[0].n, fitTo: ok[h - 1].n, testFrom: ok[h].n, testTo: ok[ok.length - 1].n, groups: out };
   }
 
+  /* ---------- 신경망 ----------
+   * 번호 하나의 최근 기록(8개 특징)을 넣으면 "다음 회차에 나올 확률"을 내는 작은 다층 신경망.
+   * 45개 번호가 같은 망을 공유하고, 회차가 지날 때마다 그 회차 결과로 조금씩 학습한다(온라인 학습).
+   * 예측할 때는 항상 그 회차 이전 데이터로만 학습된 상태다. */
+  var NN_IN = 8, NN_H1 = 16, NN_H2 = 8, NN_WINDOWS = [5, 10, 20, 50, 100];
+  var BASE_P = PICK / N;
+  var BASE_LOSS = -(BASE_P * Math.log(BASE_P) + (1 - BASE_P) * Math.log(1 - BASE_P)); // 아무것도 모를 때의 오차
+
+  function nnNew(seed) {
+    var r = rng(seed || 4545);
+    function mat(rows, cols) {
+      var m = new Float64Array(rows * cols), sc = Math.sqrt(1 / cols);
+      for (var i = 0; i < m.length; i++) m[i] = (r() * 2 - 1) * sc;
+      return m;
+    }
+    return {
+      w1: mat(NN_H1, NN_IN), b1: new Float64Array(NN_H1),
+      w2: mat(NN_H2, NN_H1), b2: new Float64Array(NN_H2),
+      w3: mat(1, NN_H2), b3: Math.log(BASE_P / (1 - BASE_P)),
+      h1: new Float64Array(NN_H1), h2: new Float64Array(NN_H2),
+      buf: [], rand: r
+    };
+  }
+
+  /* t번째 추첨(0부터)을 예측하기 위한 특징. draws[0..t-1] 만 본다. 반환: 45×8 */
+  function nnFeatures(draws, s, t) {
+    var f = new Float64Array(N * NN_IN), k, w;
+    for (w = 0; w < NN_WINDOWS.length; w++) {
+      var W = Math.min(NN_WINDOWS[w], t), c = new Int32Array(N + 1);
+      for (var a = t - W; a < t; a++) for (var b = 0; b < PICK; b++) c[draws[a].nums[b]]++;
+      var e = W * BASE_P, sd = Math.sqrt(W * BASE_P * (1 - BASE_P)) || 1;
+      for (k = 1; k <= N; k++) f[(k - 1) * NN_IN + w] = (c[k] - e) / sd;
+    }
+    var ea = s.t * BASE_P, sda = Math.sqrt(s.t * BASE_P * (1 - BASE_P)) || 1;
+    for (k = 1; k <= N; k++) {
+      var g = gapOf(s, k);
+      f[(k - 1) * NN_IN + 5] = Math.min(3, (g - 6.5) / 7);
+      f[(k - 1) * NN_IN + 6] = (g === 0 ? 1 : 0) - BASE_P;
+      f[(k - 1) * NN_IN + 7] = (s.count[k] - ea) / sda;
+    }
+    return f;
+  }
+
+  function nnForward(nn, f, off) {
+    var i, j, a;
+    for (i = 0; i < NN_H1; i++) {
+      a = nn.b1[i];
+      for (j = 0; j < NN_IN; j++) a += nn.w1[i * NN_IN + j] * f[off + j];
+      nn.h1[i] = Math.tanh(a);
+    }
+    for (i = 0; i < NN_H2; i++) {
+      a = nn.b2[i];
+      for (j = 0; j < NN_H1; j++) a += nn.w2[i * NN_H1 + j] * nn.h1[j];
+      nn.h2[i] = Math.tanh(a);
+    }
+    a = nn.b3;
+    for (j = 0; j < NN_H2; j++) a += nn.w3[j] * nn.h2[j];
+    return 1 / (1 + Math.exp(-a));
+  }
+
+  function nnPredict(nn, f) {
+    var p = new Float64Array(N + 1);
+    for (var k = 1; k <= N; k++) p[k] = nnForward(nn, f, (k - 1) * NN_IN);
+    return p;
+  }
+
+  /* 한 회차(45개 표본)에 대해 경사하강 한 번 */
+  function nnTrain(nn, f, nums, lr) {
+    var i, j;
+    for (var k = 1; k <= N; k++) {
+      var off = (k - 1) * NN_IN, p = nnForward(nn, f, off);
+      var d3 = p - (nums.indexOf(k) >= 0 ? 1 : 0);
+      var d2 = new Float64Array(NN_H2), d1 = new Float64Array(NN_H1);
+      for (j = 0; j < NN_H2; j++) d2[j] = d3 * nn.w3[j] * (1 - nn.h2[j] * nn.h2[j]);
+      for (j = 0; j < NN_H1; j++) {
+        var acc = 0;
+        for (i = 0; i < NN_H2; i++) acc += d2[i] * nn.w2[i * NN_H1 + j];
+        d1[j] = acc * (1 - nn.h1[j] * nn.h1[j]);
+      }
+      for (j = 0; j < NN_H2; j++) nn.w3[j] -= lr * d3 * nn.h2[j];
+      nn.b3 -= lr * d3;
+      for (i = 0; i < NN_H2; i++) {
+        for (j = 0; j < NN_H1; j++) nn.w2[i * NN_H1 + j] -= lr * d2[i] * nn.h1[j];
+        nn.b2[i] -= lr * d2[i];
+      }
+      for (i = 0; i < NN_H1; i++) {
+        for (j = 0; j < NN_IN; j++) nn.w1[i * NN_IN + j] -= lr * d1[i] * f[off + j];
+        nn.b1[i] -= lr * d1[i];
+      }
+    }
+  }
+
+  /* 새 회차 결과로 학습: 그 회차 + 과거 회차 몇 개를 다시 본다 */
+  function nnLearn(nn, f, nums) {
+    nn.buf.push({ f: f, nums: nums });
+    if (nn.buf.length > 400) nn.buf.shift();
+    nnTrain(nn, f, nums, 0.01);
+    for (var r = 0; r < 3; r++) {
+      var old = nn.buf[Math.floor(nn.rand() * nn.buf.length)];
+      nnTrain(nn, old.f, old.nums, 0.01);
+    }
+  }
+
+  function nnLoss(p, nums) {   // 회차 하나의 평균 오차(로그 손실)
+    var l = 0;
+    for (var k = 1; k <= N; k++) {
+      var q = Math.min(1 - 1e-9, Math.max(1e-9, p[k]));
+      l -= nums.indexOf(k) >= 0 ? Math.log(q) : Math.log(1 - q);
+    }
+    return l / N;
+  }
+
+  /* ---------- 패턴 자동 탐색 ----------
+   * "어떤 조건이면 어떤 번호가 더/덜 나온다"는 가설 수천 개를 한꺼번에 시험한다.
+   * 앞쪽 70% 회차(발견 구간)에서 가장 강해 보이는 것을 고른 뒤,
+   * 고를 때 쓰지 않은 뒤쪽 30%(검증 구간)에서도 유지되는지 본다. */
+  function patternSearch(draws, opts) {
+    opts = opts || {};
+    var n = draws.length, split = Math.floor(n * (opts.split || 0.7)), conds = [], k;
+    function has(d, x) { return d.nums.indexOf(x) >= 0; }
+    function sumOf(d) { var t = 0; for (var i = 0; i < PICK; i++) t += d.nums[i]; return t; }
+    function oddOf(d) { var t = 0; for (var i = 0; i < PICK; i++) t += d.nums[i] & 1; return t; }
+    function consec(d) { for (var i = 1; i < PICK; i++) if (d.nums[i] === d.nums[i - 1] + 1) return true; return false; }
+    function cond(text, fn) { conds.push({ text: text, fn: fn }); }
+    for (k = 1; k <= N; k++) (function (x) {
+      cond('직전 회차에 ' + x + '번이 나옴', function (t) { return has(draws[t - 1], x); });
+      cond('2회 전에 ' + x + '번이 나옴', function (t) { return has(draws[t - 2], x); });
+    })(k);
+    cond('직전 회차 번호 합이 150 이상', function (t) { return sumOf(draws[t - 1]) >= 150; });
+    cond('직전 회차 번호 합이 125 이하', function (t) { return sumOf(draws[t - 1]) <= 125; });
+    cond('직전 회차에 홀수가 4개 이상', function (t) { return oddOf(draws[t - 1]) >= 4; });
+    cond('직전 회차에 홀수가 2개 이하', function (t) { return oddOf(draws[t - 1]) <= 2; });
+    cond('직전 회차에 연속번호가 있음', function (t) { return consec(draws[t - 1]); });
+    cond('직전 회차에 연속번호가 없음', function (t) { return !consec(draws[t - 1]); });
+    cond('직전 회차 최대 번호가 38 이하', function (t) { return draws[t - 1].nums[5] <= 38; });
+    cond('직전 회차 최소 번호가 8 이상', function (t) { return draws[t - 1].nums[0] >= 8; });
+    cond('회차 번호가 짝수', function (t) { return draws[t].n % 2 === 0; });
+    cond('회차 번호가 홀수', function (t) { return draws[t].n % 2 === 1; });
+    for (k = 1; k <= 12; k++) (function (m) {
+      cond('추첨일이 ' + m + '월', function (t) { return +draws[t].d.slice(4, 6) === m; });
+    })(k);
+    for (k = 0; k <= 9; k++) (function (x) {
+      cond('회차 번호 끝자리가 ' + x, function (t) { return draws[t].n % 10 === x; });
+    })(k);
+
+    var p = BASE_P, all = [];
+    conds.forEach(function (c) {
+      var nA = 0, nB = 0, hA = new Int32Array(N + 1), hB = new Int32Array(N + 1), t, i;
+      for (t = 2; t < n; t++) {
+        if (!c.fn(t)) continue;
+        if (t < split) { nA++; for (i = 0; i < PICK; i++) hA[draws[t].nums[i]]++; }
+        else { nB++; for (i = 0; i < PICK; i++) hB[draws[t].nums[i]]++; }
+      }
+      if (nA < 30 || nB < 12) return;
+      for (var j = 1; j <= N; j++) {
+        all.push({
+          cond: c.text, target: j, nA: nA, nB: nB, rA: hA[j] / nA, rB: hB[j] / nB,
+          zA: (hA[j] - nA * p) / Math.sqrt(nA * p * (1 - p)),
+          zB: (hB[j] - nB * p) / Math.sqrt(nB * p * (1 - p))
+        });
+      }
+    });
+
+    var H = all.length, strong = 0, sa = 0, sb = 0, saa = 0, sbb = 0, sab = 0;
+    all.forEach(function (h) {
+      if (Math.abs(h.zA) > 2) strong++;
+      sa += h.zA; sb += h.zB; saa += h.zA * h.zA; sbb += h.zB * h.zB; sab += h.zA * h.zB;
+    });
+    var corr = (sab - sa * sb / H) / Math.sqrt((saa - sa * sa / H) * (sbb - sb * sb / H));
+    all.sort(function (x, y) { return Math.abs(y.zA) - Math.abs(x.zA); });
+    var top = all.slice(0, opts.top || 12), sameSign = 0, confirmed = 0;
+    top.forEach(function (h) {
+      if (h.zA * h.zB > 0) { sameSign++; if (Math.abs(h.zB) > 2) confirmed++; }
+    });
+    return {
+      hypotheses: H, conditions: conds.length, strong: strong, strongExpected: H * 0.0455,
+      corr: corr, top: top, sameSign: sameSign, confirmed: confirmed,
+      discFrom: draws[2].n, discTo: draws[split - 1].n, holdFrom: draws[split].n, holdTo: draws[n - 1].n
+    };
+  }
+
   /* ---------- 백테스트 ---------- */
   /**
    * "그 회차 직전까지의 데이터만 보고 추천 → 실제 추첨과 대조"를 과거 전 구간에 반복한다.
@@ -560,6 +741,7 @@
    */
   var BT_KEYS = ['mixed', 'hot', 'cold', 'unpop', 'random'];
   var BT_WINDOWS = [5, 10, 20, 50, 100];
+  var BT_SHOW = ['mixed', 'hot', 'cold', 'unpop', 'nn', 'random'];   // 화면에 보여 주는 순서
 
   /* 백테스트 결과를 size 회차씩 끊어, 구간마다 조합당 평균 적중 개수를 낸다.
    * 마지막에 size 에 못 미치는 자투리 구간은 버린다. */
@@ -588,6 +770,13 @@
                byDraw: new Uint8Array(total) };   // 회차별 적중 개수 합(조합 perDraw개) — 구간별 보기용
     }
     BT_KEYS.forEach(function (k) { res[k] = blank(); });
+    res.nn = blank(); res.nn.loss = 0; res.nn.baseLoss = BASE_LOSS;
+    // 신경망: 백테스트 시작 전 회차들로 미리 학습해 둔다(이후로는 회차마다 예측 → 학습)
+    var nn = nnNew(seed);
+    (function () {
+      var ws = buildState(draws, 30);
+      for (var a = 30; a < start; a++) { nnLearn(nn, nnFeatures(draws, ws, a), draws[a].nums); addDraw(ws, draws[a]); }
+    })();
     // "최근 W회만 보고 추천" 변형들
     var windows = opts.windows || BT_WINDOWS;
     windows.forEach(function (w) { res['w' + w] = blank(); });
@@ -629,6 +818,14 @@
             });
             for (j = 0; j < wp.length; j++) play('w' + windows[i], wp[j].nums, draw, false);
           }
+          var nf = nnFeatures(draws, state, t), np = nnPredict(nn, nf);
+          res.nn.loss += nnLoss(np, draw.nums);
+          var npk = generate(state, 'hot', {
+            count: perDraw, samples: 120, z: zs(function (q) { return np[q]; }),
+            rand: rng(seed + draw.n * 7 + 900)
+          });
+          for (j = 0; j < npk.length; j++) play('nn', npk[j].nums, draw, canShare);
+          nnLearn(nn, nf, draw.nums);
           addDraw(state, draw);
         }
         return t >= draws.length;
@@ -643,6 +840,7 @@
     gapOf: gapOf, numberScores: numberScores, generate: generate, randomCombo: randomCombo,
     shapeOk: shapeOk, matchCount: matchCount, rankOf: rankOf, prizeOf: prizeOf, priceOf: priceOf,
     popularity: popularity, shareFactor: shareFactor, popValidation: popValidation,
+    BT_SHOW: BT_SHOW, patternSearch: patternSearch,
     createBacktest: createBacktest, blocks: blocks, chanceBand: chanceBand, BT_WINDOWS: BT_WINDOWS,
     fairness: fairness, chiTail: chiTail, integrity: integrity, numberDetail: numberDetail, patterns: patterns
   };
