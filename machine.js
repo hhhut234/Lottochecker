@@ -1,11 +1,12 @@
-/* 추첨기 연출 — 통 안에서 공 45개가 섞이다가, 정해진 번호가 하나씩 관을 타고 올라온다. */
+/* 추첨기 연출 — 통 안에서 공 45개가 바람에 섞이다가, 정해진 번호가 하나씩 아래 출구로 떨어진다. */
 (function () {
   'use strict';
 
   var W = 260, H = 290;            // 캔버스 논리 크기
-  var CX = 130, CY = 166, R = 112; // 통 중심·반지름
-  var BR = 11.5;                   // 공 반지름
-  var EXIT_Y = -R + BR + 2;        // 통 꼭대기(관 입구), 중심 기준
+  var CX = 130, CY = 126, R = 116; // 통 중심·반지름
+  var BR = 10.5;                   // 공 반지름
+  var EXIT_Y = R - BR - 2;         // 통 바닥(출구), 중심 기준
+  var JET = 36;                    // 바닥에서 솟는 바람 기둥의 반폭
   var COLORS = [
     ['#ffe98a', '#f5b70a', '#c98600', '#3a2600'],
     ['#9fd0ff', '#2f86e0', '#1759a6', '#ffffff'],
@@ -29,7 +30,7 @@
     g.fillStyle = grad;
     g.beginPath(); g.arc(m, m, r, 0, Math.PI * 2); g.fill();
     g.fillStyle = col[3];
-    g.font = '800 ' + Math.round(10.5 * dpr) + 'px system-ui, sans-serif';
+    g.font = '800 ' + Math.round(9.8 * dpr) + 'px system-ui, sans-serif';
     g.textAlign = 'center'; g.textBaseline = 'middle';
     g.fillText(String(n), m, m + 0.5 * dpr);
     return c;
@@ -65,20 +66,29 @@
     var i, j, b, n = balls.length, target = job && job.current;
     for (i = 0; i < n; i++) {
       b = balls[i];
-      if (b.mode === 'tube') { b.x += (0 - b.x) * 0.3; b.y -= 250 * dt; continue; }
+      if (b.mode === 'tube') { b.x += (0 - b.x) * 0.3; b.vy = Math.min(420, b.vy + 1400 * dt); b.y += b.vy * dt; continue; }
+      if (b.mode === 'pick') {
+        // 뽑힌 공은 다른 공 사이를 빠져나와 바닥 가운데 출구로 빨려 들어간다
+        b.vx += (0 - b.x) * 90 * dt; b.vy += ((EXIT_Y - b.y) * 90 + 500) * dt;
+        var damp = Math.pow(0.0006, dt);
+        b.vx *= damp; b.vy *= damp;
+        b.x += b.vx * dt; b.y += b.vy * dt;
+        continue;
+      }
       b.vy += 950 * dt;
       if (blow > 0) {
-        // 바닥에서 올라오는 바람 + 소용돌이
-        var lift = b.y > -10 ? (1700 + Math.random() * 1500) : 300;
-        b.vy -= lift * blow * dt;
-        b.vx += ((Math.random() - 0.5) * 2200 - b.y * 2.2) * blow * dt;
+        // 바닥 가운데에서 솟는 바람: 가운데로 올라갔다가 벽을 타고 떨어지며 돈다
+        var ax = Math.abs(b.x);
+        if (ax < JET && b.y > -R * 0.25) {
+          var depth = Math.pow((b.y + R * 0.25) / (R * 1.25), 0.7);   // 아래쪽일수록 세고, 위쪽 절반에서는 사라진다
+          b.vy -= (3900 + Math.random() * 1300) * (1 - ax / JET * 0.5) * depth * blow * dt;
+        }
+        if (b.y < -R * 0.45) b.vx += (b.x >= 0 ? 1 : -1) * 900 * blow * dt;   // 천장 근처에서는 옆으로 밀려난다
+        if (b.y > R * 0.35 && ax >= JET) b.vx -= (b.x > 0 ? 1 : -1) * 700 * blow * dt; // 바닥에서는 가운데로 모인다
+        b.vx += (Math.random() - 0.5) * 900 * blow * dt;
+        b.vy += (Math.random() - 0.5) * 500 * blow * dt;
       }
-      if (b === target) {
-        // 뽑힐 공은 꼭대기 출구로 끌어당긴다
-        b.vx += (0 - b.x) * 26 * dt * 60 * 0.12; b.vy += (EXIT_Y - b.y) * 26 * dt * 60 * 0.12;
-        b.vx *= 0.9; b.vy *= 0.9;
-      }
-      var sp = Math.sqrt(b.vx * b.vx + b.vy * b.vy), cap = 540;
+      var sp = Math.sqrt(b.vx * b.vx + b.vy * b.vy), cap = 520;
       if (sp > cap) { b.vx *= cap / sp; b.vy *= cap / sp; }
       if (blow === 0) { b.vx *= 0.992; b.vy *= 0.997; }
       b.x += b.vx * dt; b.y += b.vy * dt;
@@ -102,7 +112,7 @@
     // 통 벽
     var lim = R - BR, energy = 0;
     for (i = 0; i < n; i++) {
-      b = balls[i]; if (b.mode !== 'in') continue;
+      b = balls[i]; if (b.mode === 'tube') continue;
       var dist = Math.sqrt(b.x * b.x + b.y * b.y);
       if (dist > lim) {
         var ux = b.x / dist, uy = b.y / dist, vn = b.vx * ux + b.vy * uy;
@@ -119,18 +129,17 @@
     ctx.clearRect(0, 0, W, H);
 
     // 받침대
+    var baseTop = CY + R - 8;
     ctx.fillStyle = '#0d1430';
-    ctx.beginPath(); ctx.moveTo(CX - 62, H - 2); ctx.lineTo(CX + 62, H - 2); ctx.lineTo(CX + 40, CY + R - 6); ctx.lineTo(CX - 40, CY + R - 6); ctx.closePath(); ctx.fill();
-    ctx.fillStyle = 'rgba(246,196,83,.55)';
-    ctx.fillRect(CX - 62, H - 5, 124, 3);
+    ctx.beginPath(); ctx.moveTo(CX - 70, H); ctx.lineTo(CX + 70, H); ctx.lineTo(CX + 44, baseTop); ctx.lineTo(CX - 44, baseTop); ctx.closePath(); ctx.fill();
 
-    // 관
-    var tubeTop = 6, tubeW = BR * 2 + 8;
-    ctx.fillStyle = 'rgba(255,255,255,.05)';
-    ctx.fillRect(CX - tubeW / 2, tubeTop, tubeW, CY - R - tubeTop + 10);
-    ctx.strokeStyle = 'rgba(255,255,255,.22)'; ctx.lineWidth = 1.5;
-    ctx.beginPath(); ctx.moveTo(CX - tubeW / 2, tubeTop); ctx.lineTo(CX - tubeW / 2, CY - R + 8);
-    ctx.moveTo(CX + tubeW / 2, tubeTop); ctx.lineTo(CX + tubeW / 2, CY - R + 8); ctx.stroke();
+    // 출구 관 (통 바닥 → 아래 번호 칸)
+    var tubeW = BR * 2 + 8;
+    ctx.fillStyle = 'rgba(255,255,255,.07)';
+    ctx.fillRect(CX - tubeW / 2, baseTop, tubeW, H - baseTop);
+    ctx.strokeStyle = 'rgba(246,196,83,.5)'; ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.moveTo(CX - tubeW / 2, baseTop + 6); ctx.lineTo(CX - tubeW / 2, H);
+    ctx.moveTo(CX + tubeW / 2, baseTop + 6); ctx.lineTo(CX + tubeW / 2, H); ctx.stroke();
 
     // 통 안쪽
     var glass = ctx.createRadialGradient(CX - 30, CY - 40, 10, CX, CY, R);
@@ -166,7 +175,7 @@
       energy = physics(dt);
       // 관을 다 올라간 공은 통에서 뺀다
       for (var i = balls.length - 1; i >= 0; i--) {
-        if (balls[i].mode === 'tube' && balls[i].y < -R - 46) {
+        if (balls[i].mode === 'tube' && balls[i].y > R + 44) {
           var out = balls.splice(i, 1)[0];
           if (job && job.current === out) emit();
         }
@@ -192,9 +201,9 @@
     if (j.current) {
       j.elapsed += dt;
       var b = j.current;
-      if (b.mode === 'in') {
+      if (b.mode === 'pick') {
         var dx = b.x, dy = b.y - EXIT_Y;
-        if (dx * dx + dy * dy < 90 || j.elapsed > 1.3) { b.mode = 'tube'; b.vx = b.vy = 0; b.x *= 0.5; b.y = Math.min(b.y, EXIT_Y); }
+        if (dx * dx + dy * dy < 70 || j.elapsed > 1.4) { b.mode = 'tube'; b.vx = 0; b.vy = 140; }
       }
       return;
     }
@@ -204,7 +213,14 @@
       var done = j.onDone; job = null; blow = 0; done();
       return;
     }
-    for (var k = 0; k < balls.length; k++) if (balls[k].n === j.nums[j.i]) { j.current = balls[k]; break; }
+    for (var k = 0; k < balls.length; k++) {
+      if (balls[k].n === j.nums[j.i]) {
+        j.current = balls.splice(k, 1)[0];
+        j.current.mode = 'pick';
+        balls.push(j.current);   // 맨 위에 그려지도록 맨 뒤로
+        break;
+      }
+    }
     j.elapsed = 0;
     if (!j.current) emit(); // 통에 없는 번호면 바로 내보낸다
   }
